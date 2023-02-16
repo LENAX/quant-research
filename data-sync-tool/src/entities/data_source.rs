@@ -2,11 +2,12 @@
 
 use chrono::prelude::*;
 use std::collections::HashMap;
-use fake::{Dummy, Fake};
+use fake::{Dummy, Fake, Faker};
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone)]
 #[readonly::make]
 pub struct DataSource {
+    #[dummy(faker = "UUID4()")]
     pub id: String,
     pub name: String,
     pub description: String,

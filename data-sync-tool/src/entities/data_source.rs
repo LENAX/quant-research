@@ -7,8 +7,8 @@ use fake::{Dummy, Fake, Faker};
 #[derive(Debug, Dummy, PartialEq, Eq, Clone)]
 #[readonly::make]
 pub struct DataSource {
-    #[dummy(faker = "UUID4()")]
-    pub id: String,
+    #[dummy(faker = "UUIDv4")]
+    pub id: Uuid,
 
     #[dummy(faker = "UUID4()")]
     pub name: String,

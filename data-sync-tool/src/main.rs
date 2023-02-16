@@ -1,12 +1,21 @@
+use fake::uuid::{UUIDv4};
 use fake::{Dummy, Fake, Faker};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use uuid::Uuid;
+use fake::faker::name::en::*;
+// use fake::locales::*;
+// use fake::locales::ZH_CN;
+// use fake::faker::name::zh_cn::Name;
 
 #[derive(Debug, Dummy)]
 pub struct Foo {
-    #[dummy(faker = "1000..2000")]
-    order_id: usize,
+    #[dummy(faker = "UUIDv4")]
+    order_id: Uuid,
+    #[dummy(faker = "Name()")]
     customer: String,
+    // #[dummy(faker = "fake::faker::lorem::en::Words(3..5)")]
+    product: String,
     paid: bool,
 }
 
@@ -14,6 +23,15 @@ fn main() {
     // type derived Dummy
     let f: Foo = Faker.fake();
     println!("{:?}", f);
+
+    let f2 = Foo {
+        order_id: Uuid::new_v4(),
+        customer: Name(ZH_CN).fake(),
+        product: Word().fake(),
+        paid: Faker.fake::<bool>(),
+    };
+    println!("{:?}", f2);
+
 
     // using `Faker` to generate default fake value of given type
     let tuple = Faker.fake::<(u8, u32, f32)>();
@@ -28,10 +46,13 @@ fn main() {
     use fake::faker::name::raw::*;
     use fake::locales::*;
 
+    let id: Uuid = UUIDv4.fake();
+    println!("uuid {:?}", id);
+
     let name: String = Name(EN).fake();
     println!("name {:?}", name);
 
-    let name: String = Name(ZH_TW).fake();
+    let name: String = Name(ZH_CN).fake();
     println!("name {:?}", name);
 
     // using convenient function without providing locale

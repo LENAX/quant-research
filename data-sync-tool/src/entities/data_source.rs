@@ -9,6 +9,8 @@ use fake::{Dummy, Fake, Faker};
 pub struct DataSource {
     #[dummy(faker = "UUID4()")]
     pub id: String,
+
+    #[dummy(faker = "UUID4()")]
     pub name: String,
     pub description: String,
     pub api_key: String,

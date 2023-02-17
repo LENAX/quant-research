@@ -1,6 +1,6 @@
 // Interfaces for entity repositories
 
-use crate::domain::entities::DataSource;
+use super::data_source::DataSource;
 use mockall::predicate::*;
 use mockall::*;
 

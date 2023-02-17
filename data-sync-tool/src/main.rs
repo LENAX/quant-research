@@ -1,12 +1,21 @@
+use chrono::{Local, Utc};
 use fake::uuid::{UUIDv4};
 use fake::{Dummy, Fake, Faker};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use uuid::Uuid;
 use fake::faker::name::en::*;
+use fake::locales::{EN, ZH_CN};
+use fake::faker::chrono::raw::*;
+// use chrono::DateTime;
+// use chrono::Local;
 // use fake::locales::*;
 // use fake::locales::ZH_CN;
 // use fake::faker::name::zh_cn::Name;
+mod domain;
+// mod infrastructure;
+// mod presentation;
+// mod services;
 
 #[derive(Debug, Dummy)]
 pub struct Foo {
@@ -31,6 +40,9 @@ fn main() {
         paid: Faker.fake::<bool>(),
     };
     println!("{:?}", f2);
+
+    let create_date: chrono::DateTime<Utc> = DateTimeBefore(EN, Utc::now()).fake();
+    print!("Date: {:?}", create_date);
 
 
     // using `Faker` to generate default fake value of given type

@@ -6,11 +6,9 @@ Data sync tool aims at providing a convenient way of managing and syncing data s
 
 This tool generally follows the DDD design pattern and emphasizes modular decoupling. It has four layers: presentation, services, entities, and infrastructure. Presentation layer is responsible for user interactions. In this layer, the tool has implemented a cli interface and web interface. Users use either way to interact with this tool. Services contain the main business logic of this tool. Entities encapsulate the core concepts and models of this tool. Infrastructure layer contains modules for external data transfer and data storage.
 
-
 ![1676612941960](image/detailed_design/1676612941960.png)
 
 ## Detailed Design
-
 
 从controller层面看，数据同步有以下步骤
 
@@ -31,6 +29,7 @@ This tool generally follows the DDD design pattern and emphasizes modular decoup
 1. DataSource, 负责描述和管理远程数据源的元数据、本地存储参数和请求参数
 2. RequestArgGeneration, 负责存储、管理和生成同步所需的参数
 3. RemoteDataSynchronization，负责管理和控制远程数据源的同步
+
 
 整个同步的流程为
 

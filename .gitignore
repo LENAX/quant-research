@@ -19,5 +19,7 @@ Cargo.lock
 
 # Custom 
 *.dtmp
+^\.\$
+*.bkp
 
 # End of https://www.toptal.com/developers/gitignore/api/rust

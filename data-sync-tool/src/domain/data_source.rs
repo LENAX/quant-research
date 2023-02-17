@@ -37,3 +37,8 @@ impl DataSource {
         }  
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+}

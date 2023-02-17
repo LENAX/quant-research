@@ -38,3 +38,9 @@ impl Dataset {
         }  
     }
 }
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+}

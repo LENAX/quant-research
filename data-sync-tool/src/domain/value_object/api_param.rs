@@ -37,3 +37,8 @@ impl APIParam {
         }  
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+}

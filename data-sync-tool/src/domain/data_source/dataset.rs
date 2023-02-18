@@ -2,7 +2,9 @@
 // Dataset describes the schema, the api endpoint, and the parameters to request for data
 
 use chrono::prelude::*;
+use fake::{Dummy, Fake};
 use std::collections::HashMap;
+use super:: value_object::{api_param::APIParam, data_schema::DataSchema};
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone)]
 #[readonly::make]
@@ -13,8 +15,8 @@ pub struct Dataset {
     pub endpoint: String, // web endpoint of this dataset
     pub params: HashMap<String, APIParam>, // a hashmap of api arguments
     pub schema: DataSchema,  // schema of this dataset
-    pub create_date: DateTime<Local>,
-    pub last_update: DateTime<Local>,
+    pub create_date: DateTime<Utc>,
+    pub last_update: Option<DateTime<Utc>>,
     pub update_successful: Option<bool>,
     pub sync_on: bool,
 }
@@ -22,8 +24,8 @@ pub struct Dataset {
 impl Dataset {
     pub fn new(id: &str, name: &str, description: &str, 
                endpoint: &str, params: HashMap<String, APIParam>, 
-               schema: DataSchema, create_date: DateTime,
-               last_update: Option<DateTime>, update_successful: Option<bool>, sync_on: bool) -> Self {
+               schema: DataSchema, create_date: DateTime<Utc>,
+               last_update: Option<DateTime<Utc>>, update_successful: Option<bool>, sync_on: bool) -> Self {
         Self {
             id: id.to_string(),
             name: name.to_string(),

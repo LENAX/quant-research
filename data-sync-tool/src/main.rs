@@ -5,7 +5,9 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use uuid::Uuid;
 use fake::faker::name::en::*;
-use fake::locales::{EN, ZH_CN};
+// use fake::locales::{EN, ZH_CN};
+use fake::locales::{EN, FR_FR, ZH_CN};
+// use fake::Fake;
 use fake::faker::chrono::raw::*;
 // use chrono::DateTime;
 // use chrono::Local;
@@ -40,6 +42,9 @@ fn main() {
         paid: Faker.fake::<bool>(),
     };
     println!("{:?}", f2);
+
+    println!("{:?}", chrono::offset::Utc::now());
+    println!("{:?}", chrono::offset::Local::now());
 
     let create_date: chrono::DateTime<Utc> = DateTimeBefore(EN, Utc::now()).fake();
     print!("Date: {:?}", create_date);
@@ -86,4 +91,7 @@ fn main() {
         let v: usize = Faker.fake_with_rng(r);
         println!("value from fixed seed {}", v);
     }
+
+    let val: String = Paragraph(3..5).fake();
+    println!("{:?}", val);
 }

@@ -1,6 +1,8 @@
 // Data Schema Value Object Definition
 
-use std::collection::HashMap;
+use std::collections::HashMap;
+
+use fake::{Dummy, Fake};
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone)]
 #[readonly::make]
@@ -17,8 +19,13 @@ pub struct DataSchema {
 }
 
 impl DataSchema {
-    pub fn new() -> Self {
-         
+    pub fn new(columns: Vec<Column>) -> Self {
+        let mut column_map: HashMap<String, Column> = HashMap::new();
+        for column in columns {
+            column_map.insert(column.name.clone(), column);
+        }
+
+        Self { columns: column_map }
     }
 }
 

@@ -1,13 +1,13 @@
 // Interfaces for entity repositories
 
-use crate::domain::entities::ArgGeneration;
+use super::arg_gen::ArgGeneration;
 use mockall::predicate::*;
 use mockall::*;
 
 #[automock]
 pub trait ArgGenRepository {
-    fn by_id(&self, id: &str) -> Result<Client, String>;
-    fn save(&self, client: Client);
+    fn by_id(&self, id: &str) -> Result<ArgGeneration, String>;
+    fn save(&self, client: ArgGeneration);
     fn next_identity(&self) -> String;
-    fn all(&self) -> Vec<Client>;
+    fn all(&self) -> Vec<ArgGeneration>;
 }

@@ -14,16 +14,16 @@ pub struct DataSource {
     pub name: String,
     pub description: String,
     pub api_key: String,
-    pub create_date: DateTime<Local>,
-    pub last_update: Option<DateTime<Local>>,
+    pub create_date: DateTime<Utc>, // fixme, Local is not compatible with Dummy
+    pub last_update: Option<DateTime<Utc>>,
     pub update_successful: Option<bool>,
     pub datasets: HashMap<String, Dataset>
 }
 
 impl DataSource {
     pub fn new(id: Uuid, name: &str, description: &str, 
-               api_key: &str, create_date: DateTime<Local>,
-               last_update: Option<DateTime<Local>>, update_successful: Option<bool>,
+               api_key: &str, create_date: DateTime<Utc>,
+               last_update: Option<DateTime<Utc>>, update_successful: Option<bool>,
                datasets: HashMap<String, Dataset>) -> Self {
         Self {
             id,
@@ -42,7 +42,8 @@ impl DataSource {
 mod test {
     use super::*;
     // use fake::faker::chrono::zh_cn::DateTimeBefore;
-    use fake::faker::lorem::en::{Paragraphs, Words};
+    use fake::faker::lorem::en::{Paragraphs, Words, Paragraph};
+    use fake::faker::name::en::Name;
     use fake::locales::ZH_CN;
     use chrono::Utc;
     use fake::faker::chrono::raw::*;
@@ -53,11 +54,11 @@ mod test {
     #[test]
     fn it_should_create_an_empty_datasource() {
         let id = UUIDv4.fake();
-        let name = Words(5..10).fake();
-        let description = Paragraphs(10..100).fake();
+        let name: String = Name().fake();
+        let description: String = Paragraph(3..5).fake();
         let api_key = Faker.fake::<String>();
         let create_date: chrono::DateTime<Utc> = DateTimeBefore(ZH_CN, Utc::now()).fake();
-        let last_update: Option<DateTime<Local>> = None;
+        let last_update: Option<DateTime<Utc>> = None;
         let update: Option<bool> = None;
         let datasets: HashMap<String, Dataset> = HashMap::new();
 

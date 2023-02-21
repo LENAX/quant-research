@@ -8,6 +8,11 @@ use getset::{CopyGetters, Getters, MutGetters, Setters};
 
 use super::dataset::Dataset;
 
+type Result<T> = std::result::Result<T, UpdateTimeEarlierThanCreationError>;
+
+#[derive(Debug, Clone)]
+pub struct UpdateTimeEarlierThanCreationError;
+
 #[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, MutGetters, CopyGetters)]
 #[readonly::make]
 pub struct DataSource {
@@ -21,7 +26,7 @@ pub struct DataSource {
     api_key: String,
     #[getset(get, set, get_mut)]
     create_date: DateTime<Utc>, // fixme, Local is not compatible with Dummy
-    #[getset(get, set, get_mut)]
+    #[getset(get, get_mut)]
     last_update: Option<DateTime<Utc>>,
     #[getset(get, set, get_mut)]
     update_successful: Option<bool>,
@@ -73,8 +78,25 @@ impl DataSource {
         }
     }
 
+    pub fn set_last_update(&mut self, update_dt: DateTime<Utc>) -> Result<&mut Self> {
+        if self.create_date > update_dt {
+            Err(UpdateTimeEarlierThanCreationError)
+        } else {
+            self.last_update = Some(update_dt);
+            Ok(self)
+        }
+    }
 
 
+}
+
+impl std::fmt::Display for DataSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f,
+               "DataSource(id: {},  name: {}, description: {}, api_key: {}, create_date: {}, last_update: {:?}, update_successful: {:?}, datasets: {:?})",
+               self.id, self.name, self.description, self.api_key, self.create_date.with_timezone(&Local), Some(self.last_update),
+               Some(self.update_successful), self.datasets)
+    }
 }
 
 #[cfg(test)]
@@ -120,8 +142,8 @@ mod test {
     #[test]
     fn getters_should_return_the_same_value_as_fields() {
         let fake_datasource: DataSource = Faker.fake();
-        println!("{:?}", fake_datasource);
-        println!("{:?}", fake_datasource.create_date());
+        println!("{}", fake_datasource);
+        println!("{:?}", fake_datasource.create_date().with_timezone(&Local));
         println!("{:?}", fake_datasource.last_update());
         println!("{:?}", fake_datasource.update_successful());
         println!("{:?}", *(fake_datasource.datasets().borrow()));
@@ -158,12 +180,13 @@ mod test {
                        .set_description(target_description)
                        .set_api_key(target_api_key)
                        .set_create_date(target_create_date)
-                       .set_last_update(Some(target_last_update))
+                       .set_last_update(target_last_update)
+                       .expect("Update time should be later than create time.")
                        .set_update_successful(Some(true))
                        .set_datasets(datasets_ref);
 
-        println!("Expect to become:\n{:?}\n", target_data);
-        println!("After update:\n{:?}", fake_datasource);
+        println!("Expect to become:\n{}\n", target_data);
+        println!("After update:\n{}", fake_datasource);
         assert_eq!(fake_datasource, target_data);
     }
 

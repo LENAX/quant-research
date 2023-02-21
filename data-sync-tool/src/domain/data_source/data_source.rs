@@ -71,8 +71,10 @@ impl DataSource {
                 datasets: datasets
             }
         }
-          
     }
+
+
+
 }
 
 #[cfg(test)]
@@ -130,6 +132,18 @@ mod test {
         assert_eq!(*fake_datasource.last_update(), fake_datasource.last_update);
         assert_eq!(*fake_datasource.update_successful(), fake_datasource.update_successful);
         assert_eq!(*fake_datasource.datasets().borrow(), *fake_datasource.datasets.borrow());
+    }
+
+    #[test]
+    fn its_setters_should_modify_fields_as_expected() {
+        let mut fake_datasource: DataSource = Faker.fake();
+        // let target_data
+
+        println!("Before update:\n{:?}", fake_datasource);
+        fake_datasource.set_name(Rc::new(RefCell::new("fake datasource".to_string())));
+        // fake_datasource.set_name(String::from("Fake data"));
+
+
     }
 
 }

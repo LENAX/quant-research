@@ -16,21 +16,21 @@ pub struct UpdateTimeEarlierThanCreationError;
 #[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, MutGetters, CopyGetters)]
 #[readonly::make]
 pub struct DataSource {
-    #[getset(get, set, get_mut)]
+    #[getset(get, set)]
     id: Uuid,
-    #[getset(get, set, get_mut)]
+    #[getset(get, set)]
     name: String,
-    #[getset(get, set, get_mut)]
+    #[getset(get, set)]
     description: String,
-    #[getset(get, set, get_mut)]
+    #[getset(get, set)]
     api_key: String,
-    #[getset(get, set, get_mut)]
+    #[getset(get, set)]
     create_date: DateTime<Utc>, // fixme, Local is not compatible with Dummy
-    #[getset(get, get_mut)]
+    #[getset(get)]
     last_update: Option<DateTime<Utc>>,
-    #[getset(get, set, get_mut)]
+    #[getset(get, set)]
     update_successful: Option<bool>,
-    #[getset(get, set, get_mut)]
+    #[getset(get)]
     datasets: Rc<RefCell<HashMap<String, Dataset>>>
 }
 

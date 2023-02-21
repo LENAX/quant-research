@@ -12,19 +12,19 @@ use super::dataset::Dataset;
 #[readonly::make]
 pub struct DataSource {
     #[getset(get, set, get_mut)]
-    id: Rc<RefCell<Uuid>>,
+    id: Uuid,
     #[getset(get, set, get_mut)]
-    name: Rc<RefCell<String>>,
+    name: String,
     #[getset(get, set, get_mut)]
-    description: Rc<RefCell<String>>,
+    description: String,
     #[getset(get, set, get_mut)]
-    api_key: Rc<RefCell<String>>,
+    api_key: String,
     #[getset(get, set, get_mut)]
-    create_date: Rc<RefCell<DateTime<Utc>>>, // fixme, Local is not compatible with Dummy
+    create_date: DateTime<Utc>, // fixme, Local is not compatible with Dummy
     #[getset(get, set, get_mut)]
-    last_update: Option<Rc<RefCell<DateTime<Utc>>>>,
+    last_update: Option<DateTime<Utc>>,
     #[getset(get, set, get_mut)]
-    update_successful: Option<Rc<RefCell<bool>>>,
+    update_successful: Option<bool>,
     #[getset(get, set, get_mut)]
     datasets: Rc<RefCell<HashMap<String, Dataset>>>
 }
@@ -37,38 +37,38 @@ impl DataSource {
         if let Some(update_dt) = last_update {
             if let Some(update_ok) = update_successful {
                 Self {
-                    id: Rc::new(RefCell::new(id)),
-                    name: Rc::new(RefCell::new(name.to_string())),
-                    description: Rc::new(RefCell::new(description.to_string())),
-                    api_key: Rc::new(RefCell::new(api_key.to_string())),
-                    create_date: Rc::new(RefCell::new(create_date)),
-                    last_update: Some(Rc::new(RefCell::new(update_dt))),
-                    update_successful: Some(Rc::new(RefCell::new(update_ok))),
-                    datasets: datasets
+                    id,
+                    name: name.to_string(),
+                    description: description.to_string(),
+                    api_key: api_key.to_string(),
+                    create_date: create_date,
+                    last_update: Some(update_dt),
+                    update_successful: Some(update_ok),
+                    datasets: datasets.clone()
                 }
             } else {
                 Self {
-                    id: Rc::new(RefCell::new(id)),
-                    name: Rc::new(RefCell::new(name.to_string())),
-                    description: Rc::new(RefCell::new(description.to_string())),
-                    api_key: Rc::new(RefCell::new(api_key.to_string())),
-                    create_date: Rc::new(RefCell::new(create_date)),
-                    last_update: Some(Rc::new(RefCell::new(update_dt))),
+                    id: id,
+                    name: name.to_string(),
+                    description: description.to_string(),
+                    api_key: api_key.to_string(),
+                    create_date: create_date,
+                    last_update: Some(update_dt),
                     update_successful: None,
-                    datasets: datasets
+                    datasets: datasets.clone()
                 }
             }
             
         } else {
             Self {
-                id: Rc::new(RefCell::new(id)),
-                name: Rc::new(RefCell::new(name.to_string())),
-                description: Rc::new(RefCell::new(description.to_string())),
-                api_key: Rc::new(RefCell::new(api_key.to_string())),
-                create_date: Rc::new(RefCell::new(create_date)),
+                id: id,
+                name: name.to_string(),
+                description: description.to_string(),
+                api_key: api_key.to_string(),
+                create_date: create_date,
                 last_update: None,
                 update_successful: None,
-                datasets: datasets
+                datasets: datasets.clone()
             }
         }
     }
@@ -102,48 +102,69 @@ mod test {
         let datasets: Rc<RefCell<HashMap<String, Dataset>>> = Rc::new(RefCell::new(HashMap::new()));
 
         let empty_datasource = DataSource::new(
-            id,&name, &description, &api_key, create_date, last_update, update, datasets.clone());
+            id, &name, &description, &api_key, create_date, last_update, update, datasets.clone());
         
         // test field access
-        assert_eq!(*empty_datasource.id.borrow(), id);
-        assert_eq!(*empty_datasource.name.borrow(), name);
-        assert_eq!(*empty_datasource.description.borrow(), description);
-        assert_eq!(*empty_datasource.api_key.borrow(), api_key);
-        assert_eq!(*empty_datasource.create_date.borrow(), create_date);
+        assert_eq!(empty_datasource.id, id);
+        assert_eq!(empty_datasource.name, name);
+        assert_eq!(empty_datasource.description, description);
+        assert_eq!(empty_datasource.api_key, api_key);
+        assert_eq!(empty_datasource.create_date, create_date);
         assert_eq!(empty_datasource.last_update, None);
         assert_eq!(empty_datasource.update_successful, None);
         assert_eq!(*empty_datasource.datasets.borrow(), *datasets.borrow());
+
+        println!("Empty datasets: {:?}", *datasets.borrow())
     }
 
     #[test]
     fn getters_should_return_the_same_value_as_fields() {
         let fake_datasource: DataSource = Faker.fake();
         println!("{:?}", fake_datasource);
-        println!("{:?}", *fake_datasource.create_date().borrow());
-        println!("{:?}", *fake_datasource.last_update());
-        println!("{:?}", *fake_datasource.update_successful());
+        println!("{:?}", fake_datasource.create_date());
+        println!("{:?}", fake_datasource.last_update());
+        println!("{:?}", fake_datasource.update_successful());
+        println!("{:?}", *(fake_datasource.datasets().borrow()));
         
         // test getters
-        assert_eq!(*fake_datasource.id().borrow(), *fake_datasource.id.borrow());
-        assert_eq!(*fake_datasource.name().borrow(), *fake_datasource.name.borrow());
-        assert_eq!(*fake_datasource.description().borrow(), *fake_datasource.description.borrow());
-        assert_eq!(*fake_datasource.api_key().borrow(), *fake_datasource.api_key.borrow());
-        assert_eq!(*fake_datasource.create_date().borrow(), *fake_datasource.create_date.borrow());
+        assert_eq!(*fake_datasource.id(), fake_datasource.id);
+        assert_eq!(*fake_datasource.name(), fake_datasource.name);
+        assert_eq!(*fake_datasource.description(), fake_datasource.description);
+        assert_eq!(*fake_datasource.api_key(), fake_datasource.api_key);
+        assert_eq!(*fake_datasource.create_date(), fake_datasource.create_date);
         assert_eq!(*fake_datasource.last_update(), fake_datasource.last_update);
         assert_eq!(*fake_datasource.update_successful(), fake_datasource.update_successful);
-        assert_eq!(*fake_datasource.datasets().borrow(), *fake_datasource.datasets.borrow());
+        assert_eq!(*(fake_datasource.datasets().borrow()), *fake_datasource.datasets.borrow());
     }
 
     #[test]
     fn its_setters_should_modify_fields_as_expected() {
         let mut fake_datasource: DataSource = Faker.fake();
-        // let target_data
+        let target_name = "fake datasource".to_string();
+        let target_description = "blah".to_string();
+        let target_api_key = "1q2w3e4r5t6y".to_string();
+        let target_create_date = DateTimeBefore(ZH_CN, Utc::now()).fake();
+        let target_last_update = chrono::offset::Utc::now();
+        let datasets_ref = fake_datasource.datasets.clone();
+        let target_data = DataSource::new(
+            fake_datasource.id, &target_name,
+            &target_description, &target_api_key,
+            target_create_date, Some(target_last_update), Some(true),
+            fake_datasource.datasets.clone()
+        );
 
-        println!("Before update:\n{:?}", fake_datasource);
-        fake_datasource.set_name(Rc::new(RefCell::new("fake datasource".to_string())));
-        // fake_datasource.set_name(String::from("Fake data"));
+        println!("Before update:\n{:?}\n", fake_datasource);
+        fake_datasource.set_name(target_name)
+                       .set_description(target_description)
+                       .set_api_key(target_api_key)
+                       .set_create_date(target_create_date)
+                       .set_last_update(Some(target_last_update))
+                       .set_update_successful(Some(true))
+                       .set_datasets(datasets_ref);
 
-
+        println!("Expect to become:\n{:?}\n", target_data);
+        println!("After update:\n{:?}", fake_datasource);
+        assert_eq!(fake_datasource, target_data);
     }
 
 }

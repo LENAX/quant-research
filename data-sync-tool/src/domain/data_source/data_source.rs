@@ -87,6 +87,16 @@ impl DataSource {
         }
     }
 
+    pub fn add_dataset(&mut self, datasets: Vec<Dataset>) -> &mut Self {
+        // TODO
+        self
+    }
+
+    pub fn remove_dataset_by_ids(&mut self, dataset_ids: Vec<Uuid>) -> &mut Self {
+        // TODO
+        self
+    }
+
 
 }
 

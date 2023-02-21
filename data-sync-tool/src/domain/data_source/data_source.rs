@@ -190,4 +190,18 @@ mod test {
         assert_eq!(fake_datasource, target_data);
     }
 
+    #[test]
+    #[should_panic]
+    fn it_should_panic_if_attempts_to_set_an_invalid_update_time() {
+        let mut fake_datasource: DataSource = Faker.fake();
+        let target_update_date: DateTime<Utc>  = DateTimeBefore(ZH_CN, fake_datasource.create_date).fake();
+
+        assert!(fake_datasource.create_date > target_update_date);
+        println!("Set an invalid update time should panic. create_time: {:?}, update_time: {:?}",
+                 fake_datasource.create_date.with_timezone(&Local),
+                 target_update_date.with_timezone(&Local));
+        
+        fake_datasource.set_last_update(target_update_date).unwrap();
+    }
+
 }

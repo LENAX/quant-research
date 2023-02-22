@@ -58,6 +58,15 @@ impl DataSource {
                api_key: &str, create_date: DateTime<Utc>,
                last_update: Option<DateTime<Utc>>, update_successful: Option<bool>,
                datasets: HashMap<String, Rc<RefCell<Dataset>>>) -> Result<Self, UpdateStatusShouldCoexistWithItsDate> {
+        let mut id_mapped_datasets: HashMap<String, Rc<RefCell<Dataset>>> = HashMap::new();
+        
+        datasets.values()
+                // .into_iter()
+                .for_each(|v| {
+                    let dataset_id = v.as_ref().borrow().id.to_string();
+                    id_mapped_datasets.insert(dataset_id, v.clone());
+                });
+        
         match last_update {
             None => {
                 if let Some(_) = update_successful {
@@ -72,7 +81,7 @@ impl DataSource {
                             create_date,
                             last_update: None,
                             update_successful: None,
-                            datasets: datasets
+                            datasets: id_mapped_datasets
                         });
                 }
             },
@@ -86,7 +95,7 @@ impl DataSource {
                             create_date,
                             last_update: Some(update_dt),
                             update_successful: Some(update_ok),
-                            datasets: datasets
+                            datasets: id_mapped_datasets
                         });
                     
                 } else {
@@ -98,7 +107,7 @@ impl DataSource {
                             create_date,
                             last_update: Some(update_dt),
                             update_successful: Some(false),
-                            datasets: datasets
+                            datasets: id_mapped_datasets
                         });
                 }
             }
@@ -122,12 +131,22 @@ impl DataSource {
         return Ok(self)
     }
 
-    pub fn remove_dataset_by_ids(&mut self, dataset_ids: Vec<Uuid>) -> Result<&mut Self, BorrowMutError> {
+    pub fn get_datasets_by_ids(&self, dataset_ids: Vec<&str>) -> HashMap<String, Rc<RefCell<Dataset>>> {
+        let mut result_map: HashMap<String, Rc<RefCell<Dataset>>> = HashMap::new();
+        for id in dataset_ids {
+            if let Some(matched_ds) = self.datasets.get(id) {
+                result_map.insert(String::from(id), matched_ds.clone());
+            }
+        }
+        result_map
+    }
+
+    pub fn remove_dataset_by_ids(&mut self, dataset_ids: Vec<&str>) -> &mut Self {
         // TODO
         for dataset_id in dataset_ids {
-            self.datasets.remove(&dataset_id.to_string());
+            self.datasets.remove(dataset_id);
         }
-        return Ok(self)
+        return self
     }
 
 
@@ -160,7 +179,6 @@ impl Default for DataSource {
 #[cfg(test)]
 mod test {
     use super::*;
-    // use fake::faker::chrono::zh_cn::DateTimeBefore;
     use fake::faker::lorem::en::Paragraph;
     use fake::faker::name::en::Name;
     use fake::locales::ZH_CN;
@@ -169,6 +187,7 @@ mod test {
     use fake::{Fake, Faker};
     use fake::uuid::UUIDv4;
     use chrono::DateTime;
+    use rand::seq::SliceRandom;
 
     #[test]
     fn it_should_create_an_empty_datasource() {
@@ -234,7 +253,6 @@ mod test {
                 .into_iter()
                 .map(|dataset| { (dataset.id.to_string(), Rc::new(RefCell::new(dataset))) })
                 .collect();
-        let datasets_ref = fake_datasource.datasets.clone();
         let target_data = DataSource::new(
             fake_datasource.id, &target_name,
             &target_description, &target_api_key,
@@ -274,7 +292,7 @@ mod test {
     #[test]
     fn it_should_add_datasets_as_expected() {
         let mut datasource = DataSource::default();
-        println!("New DataSource with default value: {}", datasource);
+        println!("New DataSource with default value:\n{}\n", datasource);
 
         let test_datasets= vec![
             Rc::new(RefCell::new(Faker.fake::<Dataset>())),
@@ -289,15 +307,66 @@ mod test {
         let updated_datasource = datasource
             .add_datasets(test_datasets.clone()).expect("Failed to borrow field dataset");
         
-        // let all_equal: Vec<bool> = updated_datasource
-        //     .datasets()
-        //     // .into_iter()
-        //     .zip(test_datasets)
-        //     .map(|pair| { *pair.0 == pair.1})
-        //     .collect();
-        // println!("All equal: {:?}", all_equal.iter().fold(true, |sum, &val| {sum && val}));
-        
-        // for each dataset in test dataset, get a dataset object for datasource.datasets, compare for equality
+        let all_dataset_matched = test_datasets
+            .as_slice()
+            .into_iter()
+            .map(|ds| {
+                let dataset_id = (*ds.as_ref()).borrow().id.to_string();
+                let matched_ds = updated_datasource.datasets.get(&dataset_id);
+
+                match matched_ds {
+                    Some(d) => {
+                        *(*d.as_ref()).borrow() == *(*ds.as_ref()).borrow()
+                    },
+                    None => false
+                }
+            })
+            .fold(true, |compare_result, val| compare_result && val);
+        println!("All matched: {}", all_dataset_matched);
+
+    }
+
+    #[test]
+    fn it_should_get_datasets_by_ids_as_expected() {
+        let mut fake_datasource: DataSource = Faker.fake();
+        let test_datasets= vec![
+            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+        ];
+
+        let test_ds_map: HashMap<String, Rc<RefCell<Dataset>>> = test_datasets
+            .into_iter()
+            .map(|d| {
+                (d.as_ref().borrow().id.to_string(), d.clone())
+            })
+            .collect();
+        fake_datasource.set_datasets(test_ds_map);
+        // println!("datasource: {:?}", fake_datasource);
+        let mut rng = rand::thread_rng();
+        // let fake_datasource_cpy = fake_datasource.clone();
+        let dataset_ids: Vec<&str> = fake_datasource.datasets().keys().map(|k| k.as_str()).collect();
+        let sample_ids: Vec<_> = dataset_ids.choose_multiple (&mut rng, 3).collect();
+        println!("{:?}", sample_ids);
+
+        if sample_ids.len() > 0 {
+            let fetched_datasets = fake_datasource.get_datasets_by_ids(dataset_ids.clone());
+            println!("fetched dataset: {:?}", fetched_datasets);
+
+            for id in dataset_ids {
+                assert!(fetched_datasets.contains_key(id));
+            }
+        } else {
+            println!("Not enough samples.")
+        }
+    }
+
+    #[test]
+    fn it_should_remove_datasets_as_expected() {
 
     }
 

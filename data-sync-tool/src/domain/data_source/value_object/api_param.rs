@@ -1,8 +1,8 @@
 // APIParams Value Object Definition
 
 use chrono::prelude::*;
-use std::collections::HashMap;
 use fake::{Dummy, Fake};
+use std::collections::HashMap;
 
 // #[derive(Clone, Copy, PartialEq, Eq)]
 // enum ArgType {
@@ -24,9 +24,14 @@ pub struct APIParam {
 }
 
 impl APIParam {
-    pub fn new(name: &str, description: &str, 
-               arg_type: &str, required: bool, require_generation: bool,
-               generate_by: &str) -> Self {
+    pub fn new(
+        name: &str,
+        description: &str,
+        arg_type: &str,
+        required: bool,
+        require_generation: bool,
+        generate_by: &str,
+    ) -> Self {
         Self {
             name: name.to_string(),
             description: description.to_string(),
@@ -34,7 +39,7 @@ impl APIParam {
             required,
             require_generation,
             generate_by: generate_by.to_string(),
-        }  
+        }
     }
 }
 

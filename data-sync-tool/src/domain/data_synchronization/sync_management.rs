@@ -14,8 +14,6 @@ pub struct SyncManagement {
 
 impl SyncManagement {
     pub fn new(id: Uuid) -> Self {
-        Self {
-            id
-        }
+        Self { id }
     }
 }

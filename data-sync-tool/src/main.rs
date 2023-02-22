@@ -1,10 +1,10 @@
 use chrono::{Local, Utc};
-use fake::uuid::{UUIDv4};
+use fake::faker::name::en::*;
+use fake::uuid::UUIDv4;
 use fake::{Dummy, Fake, Faker};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use uuid::Uuid;
-use fake::faker::name::en::*;
 // use fake::locales::{EN, ZH_CN};
 use fake::locales::{EN, FR_FR, ZH_CN};
 // use fake::Fake;
@@ -48,7 +48,6 @@ fn main() {
 
     let create_date: chrono::DateTime<Utc> = DateTimeBefore(EN, Utc::now()).fake();
     print!("Date: {:?}", create_date);
-
 
     // using `Faker` to generate default fake value of given type
     let tuple = Faker.fake::<(u8, u32, f32)>();

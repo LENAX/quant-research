@@ -15,7 +15,7 @@ pub struct Column {
 #[derive(Debug, Dummy, PartialEq, Eq, Clone)]
 #[readonly::make]
 pub struct DataSchema {
-    pub columns: HashMap<String, Column>
+    pub columns: HashMap<String, Column>,
 }
 
 impl DataSchema {
@@ -25,7 +25,9 @@ impl DataSchema {
             column_map.insert(column.name.clone(), column);
         }
 
-        Self { columns: column_map }
+        Self {
+            columns: column_map,
+        }
     }
 }
 

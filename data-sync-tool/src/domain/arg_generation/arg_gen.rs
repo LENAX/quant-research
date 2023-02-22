@@ -15,8 +15,6 @@ pub struct ArgGeneration {
 
 impl ArgGeneration {
     pub fn new(id: Uuid) -> Self {
-        Self {
-            id,
-        }
+        Self { id }
     }
 }

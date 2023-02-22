@@ -131,11 +131,11 @@ impl DataSource {
         return Ok(self)
     }
 
-    pub fn get_datasets_by_ids(&self, dataset_ids: Vec<&str>) -> HashMap<String, Rc<RefCell<Dataset>>> {
+    pub fn get_datasets_by_ids(&self, dataset_ids: &Vec<&str>) -> HashMap<String, Rc<RefCell<Dataset>>> {
         let mut result_map: HashMap<String, Rc<RefCell<Dataset>>> = HashMap::new();
         for id in dataset_ids {
-            if let Some(matched_ds) = self.datasets.get(id) {
-                result_map.insert(String::from(id), matched_ds.clone());
+            if let Some(matched_ds) = self.datasets.get(*id) {
+                result_map.insert(String::from(*id), matched_ds.clone());
             }
         }
         result_map
@@ -354,7 +354,7 @@ mod test {
         println!("{:?}", sample_ids);
 
         if sample_ids.len() > 0 {
-            let fetched_datasets = fake_datasource.get_datasets_by_ids(dataset_ids.clone());
+            let fetched_datasets = fake_datasource.get_datasets_by_ids(&dataset_ids);
             println!("fetched dataset: {:?}", fetched_datasets);
 
             for id in dataset_ids {

@@ -4,8 +4,8 @@
 use super::value_object::{api_param::APIParam, data_schema::DataSchema};
 use chrono::prelude::*;
 use fake::{Dummy, Fake};
-use uuid::Uuid;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone)]
 #[readonly::make]

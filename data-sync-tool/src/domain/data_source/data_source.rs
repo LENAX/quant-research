@@ -21,35 +21,27 @@ pub struct UpdateStatusShouldCoexistWithItsDate;
 #[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, MutGetters, CopyGetters)]
 pub struct DataSource {
     #[getset(get, set)]
-    // #[derivative(Default(value = "Uuid::new_v4()"))]
     id: Uuid,
 
     #[getset(get, set)]
-    // #[derivative(Default(value = ""))]
     name: String,
 
     #[getset(get, set)]
-    // #[derivative(Default(value = ""))]
     description: String,
 
     #[getset(get, set)]
-    // #[derivative(Default(value = ""))]
     api_key: String,
     
     #[getset(get, set)]
-    // #[derivative(Default(value = "chrono::offset::Utc::now()"))]
-    create_date: DateTime<Utc>, // fixme, Local is not compatible with Dummy
+    create_date: DateTime<Utc>,
     
     #[getset(get)]
-    // #[derivative(Default(value = "None"))]
     last_update: Option<DateTime<Utc>>, 
    
     #[getset(get, set)]
-    // #[derivative(Default(value = "None"))]
     update_successful: Option<bool>, // defaults to true if last_update is provided
     
     #[getset(get)]
-    // #[derivative(Default(value = "Rc::new(RefCell::new(HashMap::new()))"))]
     datasets: HashMap<String, Rc<RefCell<Dataset>>>
 }
 
@@ -123,7 +115,6 @@ impl DataSource {
     }
 
     pub fn add_datasets(&mut self, datasets: &Vec<Rc<RefCell<Dataset>>>) -> Result<&mut Self, BorrowMutError> {
-        // TODO
         for dataset in datasets {
             self.datasets.insert(dataset.borrow().id.to_string(), dataset.clone());
         }
@@ -141,7 +132,6 @@ impl DataSource {
     }
 
     pub fn remove_dataset_by_ids(&mut self, dataset_ids: &Vec<String>) -> &mut Self {
-        // TODO
         for dataset_id in dataset_ids {
             self.datasets.remove(dataset_id);
         }

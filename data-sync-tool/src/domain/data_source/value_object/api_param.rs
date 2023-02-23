@@ -2,6 +2,7 @@
 
 use chrono::prelude::*;
 use fake::{Dummy, Fake};
+use getset::{CopyGetters, Getters, MutGetters, Setters};
 use std::collections::HashMap;
 
 // #[derive(Clone, Copy, PartialEq, Eq)]
@@ -12,14 +13,19 @@ use std::collections::HashMap;
 //     DateTime
 // }
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone)]
-#[readonly::make]
+#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, MutGetters, CopyGetters)]
 pub struct APIParam {
+    #[getset(get = "pub", set = "pub")]
     name: String,
+    #[getset(get = "pub", set = "pub")]
     description: String,
+    #[getset(get = "pub", set = "pub")]
     arg_type: String,
+    #[getset(get = "pub", set = "pub")]
     required: bool,
+    #[getset(get = "pub", set = "pub")]
     require_generation: bool,
+    #[getset(get = "pub", set = "pub")]
     generate_by: String,
 }
 

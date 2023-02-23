@@ -3,7 +3,10 @@
 
 use super::{
     data_source::{UpdateStatusShouldCoexistWithItsDate, UpdateTimeEarlierThanCreationError},
-    value_object::{api_param::APIParam, data_schema::{DataSchema, Column}},
+    value_object::{
+        api_param::APIParam,
+        data_schema::{Column, DataSchema},
+    },
 };
 use chrono::prelude::*;
 use fake::{Dummy, Fake};
@@ -165,7 +168,10 @@ impl Dataset {
     }
 
     pub fn remove_columns_from_schema_by_name(&mut self, column_names: &Vec<String>) -> &mut Self {
-        self.schema().as_ref().borrow_mut().remove_columns_by_name(column_names);
+        self.schema()
+            .as_ref()
+            .borrow_mut()
+            .remove_columns_by_name(column_names);
         return self;
     }
 
@@ -173,7 +179,6 @@ impl Dataset {
         self.schema().as_ref().borrow_mut().remove_all_columns();
         return self;
     }
-
 }
 
 impl Default for Dataset {

@@ -386,26 +386,20 @@ mod test {
         fake_datasource.remove_all_datasets();
         fake_datasource.add_datasets(&test_datasets).unwrap();
 
-        test_datasets[0..3]
-            .into_iter()
-            .for_each(|d| {
-                d.borrow_mut().set_sync_enabled(true);
-            });
+        test_datasets[0..3].into_iter().for_each(|d| {
+            d.borrow_mut().set_sync_enabled(true);
+        });
 
-        test_datasets[4..]
-            .into_iter()
-            .for_each(|d| {
-                d.borrow_mut().set_sync_enabled(false);
-            });
+        test_datasets[4..].into_iter().for_each(|d| {
+            d.borrow_mut().set_sync_enabled(false);
+        });
 
         let sync_status_of_datasets: Vec<bool> = test_datasets
             .iter()
             .map(|d| *d.borrow().sync_enabled())
             .collect();
-        
-        println!(
-            "test_datasets sync_enabled: {:?}",
-            sync_status_of_datasets);
+
+        println!("test_datasets sync_enabled: {:?}", sync_status_of_datasets);
 
         let datasets_sync_enabled = fake_datasource.get_datasets_requires_sync();
         assert_eq!(datasets_sync_enabled.len(), 4);

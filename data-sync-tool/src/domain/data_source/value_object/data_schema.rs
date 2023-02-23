@@ -10,7 +10,7 @@ pub enum ColumnType {
     String,
     Int,
     Float,
-    Double
+    Double,
 }
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, MutGetters)]
@@ -60,7 +60,6 @@ impl DataSchema {
         self.columns.clear();
         return self;
     }
-
 }
 
 impl Default for DataSchema {

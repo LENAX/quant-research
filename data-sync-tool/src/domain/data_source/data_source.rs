@@ -175,6 +175,12 @@ impl DataSource {
         self.datasets.clear();
         return self;
     }
+
+    // TODO: Advanced Features: Automatic Schema Import and Parsing
+
+    // TODO: Advanced Features: Automatic DB Schema Creation
+
+    // TODO: Advanced Features: Automatic Schema Migration
 }
 
 impl std::fmt::Display for DataSource {

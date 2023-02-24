@@ -1,26 +1,41 @@
 //! Data Source Domain Object Definition
 
 use chrono::prelude::*;
-use derivative::Derivative;
 use fake::{Dummy, Fake};
 use getset::{CopyGetters, Getters, MutGetters, Setters};
 use std::{
-    cell::{BorrowMutError, RefCell},
+    cell::RefCell,
     collections::HashMap,
-    rc::Rc,
+    rc::Rc, error, fmt,
 };
 use uuid::Uuid;
 
 use super::dataset::Dataset;
 
-// type Result<T> = std::result::Result<T, UpdateTimeEarlierThanCreationError>;
+type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
+
+
 
 // Errors
 #[derive(Debug, Clone)]
 pub struct UpdateTimeEarlierThanCreationError;
+impl fmt::Display for UpdateTimeEarlierThanCreationError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Update time should be later than creation time!")
+    }
+}
+
 
 #[derive(Debug, Clone)]
 pub struct UpdateStatusShouldCoexistWithItsDate;
+impl fmt::Display for UpdateStatusShouldCoexistWithItsDate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "If the entity is updated, then it should has an update status.")
+    }
+}
+
+impl error::Error for UpdateStatusShouldCoexistWithItsDate {}
+impl error::Error for UpdateTimeEarlierThanCreationError {}
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, MutGetters, CopyGetters)]
 pub struct DataSource {
@@ -59,7 +74,7 @@ impl DataSource {
         last_update: Option<DateTime<Utc>>,
         update_successful: Option<bool>,
         datasets: &[Rc<RefCell<Dataset>>],
-    ) -> Result<Self, UpdateStatusShouldCoexistWithItsDate> {
+    ) -> Result<Self> {
         let mut id_mapped_datasets: HashMap<String, Rc<RefCell<Dataset>>> = HashMap::new();
 
         datasets.into_iter().for_each(|v| {
@@ -70,7 +85,7 @@ impl DataSource {
         match last_update {
             None => {
                 if let Some(_) = update_successful {
-                    return Err(UpdateStatusShouldCoexistWithItsDate);
+                    return Err(Box::new(UpdateStatusShouldCoexistWithItsDate));
                 } else {
                     return Ok(Self {
                         id,
@@ -115,9 +130,9 @@ impl DataSource {
     pub fn set_last_update(
         &mut self,
         update_dt: DateTime<Utc>,
-    ) -> Result<&mut Self, UpdateTimeEarlierThanCreationError> {
+    ) -> Result<&mut Self> {
         if self.create_date > update_dt {
-            Err(UpdateTimeEarlierThanCreationError)
+            Err(Box::new(UpdateTimeEarlierThanCreationError))
         } else {
             self.last_update = Some(update_dt);
             Ok(self)
@@ -127,7 +142,7 @@ impl DataSource {
     pub fn add_datasets(
         &mut self,
         datasets: &Vec<Rc<RefCell<Dataset>>>,
-    ) -> Result<&mut Self, BorrowMutError> {
+    ) -> Result<&mut Self> {
         for dataset in datasets {
             self.datasets
                 .insert(dataset.borrow().id().to_string(), dataset.clone());
@@ -222,7 +237,7 @@ mod test {
 
     #[test]
     fn it_should_create_an_empty_datasource() {
-        let id = UUIDv4.fake();
+        let id: Uuid = UUIDv4.fake();
         let name: String = Name().fake();
         let description: String = Paragraph(3..5).fake();
         let api_key = Faker.fake::<String>();

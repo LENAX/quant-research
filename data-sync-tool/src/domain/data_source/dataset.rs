@@ -12,11 +12,24 @@ use chrono::prelude::*;
 use fake::{Dummy, Fake};
 use getset::{Getters, Setters};
 use std::{
-    cell::{BorrowMutError, RefCell},
+    cell::RefCell,
     collections::HashMap,
-    rc::Rc,
+    rc::Rc, error, fmt,
 };
 use uuid::Uuid;
+use regex::Regex;
+use lazy_static::lazy_static;
+
+type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
+
+#[derive(Debug, Clone)]
+pub struct InvalidAPIEndpointFormat;
+impl fmt::Display for InvalidAPIEndpointFormat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "API endpoint format is invalid!")
+    }
+}
+impl error::Error for InvalidAPIEndpointFormat {}
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters)]
 #[readonly::make]
@@ -55,16 +68,22 @@ impl Dataset {
         last_update: Option<DateTime<Utc>>,
         update_successful: Option<bool>,
         sync_enabled: bool,
-    ) -> Result<Self, UpdateStatusShouldCoexistWithItsDate> {
+    ) -> Result<Self> {
         let mut params_map: HashMap<String, Rc<RefCell<APIParam>>> = HashMap::new();
         api_params.into_iter().for_each(|p| {
             params_map.insert(p.as_ref().borrow().name().clone(), p.clone());
         });
+        lazy_static! {
+            static ref RE: Regex = Regex::new("^/[a-zA-Z0-9-_]+$").unwrap();
+        }
+        if !RE.is_match(endpoint) {
+            return Err(Box::new(InvalidAPIEndpointFormat));
+        }
 
         match last_update {
             None => {
                 if let Some(_) = update_successful {
-                    return Err(UpdateStatusShouldCoexistWithItsDate);
+                    return Err(Box::new(UpdateStatusShouldCoexistWithItsDate));
                 } else {
                     return Ok(Self {
                         id,
@@ -115,9 +134,9 @@ impl Dataset {
     pub fn set_last_update(
         &mut self,
         update_dt: DateTime<Utc>,
-    ) -> Result<&mut Self, UpdateTimeEarlierThanCreationError> {
+    ) -> Result<&mut Self> {
         if self.create_date > update_dt {
-            Err(UpdateTimeEarlierThanCreationError)
+            Err(Box::new(UpdateTimeEarlierThanCreationError))
         } else {
             self.last_update = Some(update_dt);
             Ok(self)
@@ -127,7 +146,7 @@ impl Dataset {
     pub fn add_api_params(
         &mut self,
         api_params: &Vec<Rc<RefCell<APIParam>>>,
-    ) -> Result<&mut Self, BorrowMutError> {
+    ) -> Result<&mut Self> {
         for api_param in api_params {
             self.api_params.insert(
                 api_param.as_ref().borrow().name().to_string(),
@@ -201,4 +220,61 @@ impl Default for Dataset {
 #[cfg(test)]
 mod test {
     use super::*;
+    use chrono::DateTime;
+    use chrono::Utc;
+    use fake::faker::chrono::raw::*;
+    use fake::faker::lorem::en::Paragraph;
+    use fake::faker::name::en::Name;
+    use fake::locales::ZH_CN;
+    use fake::uuid::UUIDv4;
+    use fake::{Fake, Faker};
+
+    #[test]
+    fn it_should_create_a_default_dataset() {
+        let default_dataset = Dataset::default();
+
+        assert_eq!(default_dataset.name, "New APIParam".to_string());
+        assert_eq!(default_dataset.description, String::from("Please write a description."));
+        assert_eq!(default_dataset.endpoint, String::from("/example/endpoint"));
+        assert_eq!(default_dataset.api_params.len(), 0);
+        assert_eq!(default_dataset.schema.take(), DataSchema::default());
+        assert_eq!(default_dataset.last_update, None);
+        assert_eq!(default_dataset.update_successful, None);
+        assert_eq!(default_dataset.sync_enabled, false);
+    }
+
+    #[test]
+    fn it_should_create_a_new_dataset() {
+        let id: Uuid = UUIDv4.fake();
+        let name: String = Name().fake();
+        let description: String = Paragraph(3..5).fake();
+        let endpoint = String::from("/test");
+        let create_date: chrono::DateTime<Utc> = DateTimeBefore(ZH_CN, Utc::now()).fake();
+        let last_update: Option<DateTime<Utc>> = None;
+        let update: Option<bool> = None;
+        let api_params: Vec<Rc<RefCell<APIParam>>> = vec![
+            Rc::new(RefCell::new(Faker.fake::<APIParam>())),
+            Rc::new(RefCell::new(Faker.fake::<APIParam>())),
+            Rc::new(RefCell::new(Faker.fake::<APIParam>())),
+            Rc::new(RefCell::new(Faker.fake::<APIParam>())),
+            Rc::new(RefCell::new(Faker.fake::<APIParam>()))
+        ];
+        println!("api params: {:?}", api_params);
+
+        let schema = DataSchema::default();
+        let sync_enabled = true;
+
+        let new_dataset = Dataset::new(
+            id, &name, &description, &endpoint, &api_params, schema, create_date,
+            None, None, sync_enabled,
+        ).expect("Creation failed");
+
+        assert_eq!(new_dataset.id, id);
+        assert_eq!(new_dataset.name, name);
+        assert_eq!(new_dataset.description, description);
+        assert_eq!(new_dataset.endpoint, endpoint);
+        assert_eq!(new_dataset.last_update, last_update);
+        assert_eq!(new_dataset.update_successful, update);
+        assert_eq!(new_dataset.api_params.len(), 5);
+    }
 }

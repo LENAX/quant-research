@@ -1,6 +1,24 @@
 # Data Sync Tool
 
-Data sync tool aims at providing a convenient way of managing and syncing data sources like Tushare and Quandl. This tool provides automatic data set synchronization. You can configure this tool to adapt to your local storage, such as file system, database, etc.
+Data sync tool aims at providing a convenient way of managing and syncing remote data sources like Tushare and Quandl. This tool allows you to create a local copy of the remote data source, validating the quality of the data, and manage the local storage of the data fetched from remote data sources.
+
+核心：远程数据源的取、验、存
+
+## Features
+
+1. Convenient Data Source Management
+   1. You can add new data source by providing the url to its documentation page. This tool will try to figure out the metadata by parsing the page and automatically create new data source.
+   2. You can decide whether enabling synchronization for each data set
+   3. You can preview the data of the data source
+   4. Your localized data will always be in sync with the remote, even if they updated the schema
+   5. This tool will ensure the quality of the localized data. If there is anything wrong or missing, you will be notified.
+2. Automatic Synchronization
+   1. Once you configured the data source, this tool will make sure the data are in sync
+   2. The process of synchronization is highly parallelized up to the limit of the remote data source.
+3. Local storage configuration
+   1. You can decide where to store the data.
+   2. You can even store data in different format and to different location. You can store it in the filesystem, a database, object storage. You don't even have to store it on your local machine. It can be elsewhere like your cloud server.
+
 
 ## Architecture
 

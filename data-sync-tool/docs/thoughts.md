@@ -10,9 +10,19 @@ LocalStorage can be an independent domain. It manages local storage, perform mig
 
 To support API document parsing and automatic import of data source, we can have a DocParser domain to take care of document parsing. With our event based architecture, we can define a ParsingCompleted event and put ParsingResult into the event. 
 
-DataSource Domain listen
+Domain businesses are those operations that modify domain objects.
+
+
+## DataSource
+
+DataSource domain is about managing metadata of remote data source, and validating the data fetched from it. It also cares about the synchronization state with the remote data source. 
 
 
 ## Synchronization
 
-Since synchronzation has its own complexity, it should be separated out from data source management
+Since synchronzation has its own complexity, it should be separated out from data source management. This domain reflects the business process of fetch data and keeping track of states. It only cares about the process of fetching data from remote data source, and it does not care whether the data is valid or where should the data be stored.
+
+
+## Local Storage
+
+This domain manages local storage of remote data. It is responsible for storing the data fetched from remote. This domain sounds like an infrastructure layer, but it is more than that. We can add a layer of abstraction and provide flexible management over all storages.

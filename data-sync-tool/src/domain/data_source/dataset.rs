@@ -11,14 +11,10 @@ use super::{
 use chrono::prelude::*;
 use fake::{Dummy, Fake};
 use getset::{Getters, Setters};
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    rc::Rc, error, fmt,
-};
-use uuid::Uuid;
-use regex::Regex;
 use lazy_static::lazy_static;
+use regex::Regex;
+use std::{cell::RefCell, collections::HashMap, error, fmt, rc::Rc};
+use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
@@ -49,7 +45,7 @@ pub struct Dataset {
     #[getset(get = "pub", set = "pub")]
     create_date: DateTime<Utc>,
     #[getset(get = "pub")]
-    last_update: Option<DateTime<Utc>>,
+    last_update_time: Option<DateTime<Utc>>,
     #[getset(get = "pub", set = "pub")]
     update_successful: Option<bool>,
     #[getset(get = "pub", set = "pub")]
@@ -65,7 +61,7 @@ impl Dataset {
         api_params: &Vec<Rc<RefCell<APIParam>>>,
         schema: DataSchema,
         create_date: DateTime<Utc>,
-        last_update: Option<DateTime<Utc>>,
+        last_update_time: Option<DateTime<Utc>>,
         update_successful: Option<bool>,
         sync_enabled: bool,
     ) -> Result<Self> {
@@ -80,7 +76,7 @@ impl Dataset {
             return Err(Box::new(InvalidAPIEndpointFormat));
         }
 
-        match last_update {
+        match last_update_time {
             None => {
                 if let Some(_) = update_successful {
                     return Err(Box::new(UpdateStatusShouldCoexistWithItsDate));
@@ -93,7 +89,7 @@ impl Dataset {
                         api_params: params_map,
                         schema: Rc::new(RefCell::new(schema)),
                         create_date,
-                        last_update: None,
+                        last_update_time: None,
                         update_successful: None,
                         sync_enabled,
                     });
@@ -109,7 +105,7 @@ impl Dataset {
                         api_params: params_map,
                         schema: Rc::new(RefCell::new(schema)),
                         create_date,
-                        last_update: Some(update_dt),
+                        last_update_time: Some(update_dt),
                         update_successful: Some(update_ok),
                         sync_enabled,
                     });
@@ -122,7 +118,7 @@ impl Dataset {
                         api_params: params_map,
                         schema: Rc::new(RefCell::new(schema)),
                         create_date,
-                        last_update: Some(update_dt),
+                        last_update_time: Some(update_dt),
                         update_successful: Some(false),
                         sync_enabled,
                     });
@@ -131,22 +127,16 @@ impl Dataset {
         }
     }
 
-    pub fn set_last_update(
-        &mut self,
-        update_dt: DateTime<Utc>,
-    ) -> Result<&mut Self> {
+    pub fn set_last_update_time(&mut self, update_dt: DateTime<Utc>) -> Result<&mut Self> {
         if self.create_date > update_dt {
             Err(Box::new(UpdateTimeEarlierThanCreationError))
         } else {
-            self.last_update = Some(update_dt);
+            self.last_update_time = Some(update_dt);
             Ok(self)
         }
     }
 
-    pub fn add_api_params(
-        &mut self,
-        api_params: &Vec<Rc<RefCell<APIParam>>>,
-    ) -> Result<&mut Self> {
+    pub fn add_api_params(&mut self, api_params: &Vec<Rc<RefCell<APIParam>>>) -> Result<&mut Self> {
         for api_param in api_params {
             self.api_params.insert(
                 api_param.as_ref().borrow().name().to_string(),
@@ -210,7 +200,7 @@ impl Default for Dataset {
             api_params: HashMap::new(),
             schema: Rc::new(RefCell::new(DataSchema::default())),
             create_date: chrono::offset::Utc::now(),
-            last_update: None,
+            last_update_time: None,
             update_successful: None,
             sync_enabled: false,
         }
@@ -234,11 +224,14 @@ mod test {
         let default_dataset = Dataset::default();
 
         assert_eq!(default_dataset.name, "New APIParam".to_string());
-        assert_eq!(default_dataset.description, String::from("Please write a description."));
+        assert_eq!(
+            default_dataset.description,
+            String::from("Please write a description.")
+        );
         assert_eq!(default_dataset.endpoint, String::from("/example/endpoint"));
         assert_eq!(default_dataset.api_params.len(), 0);
         assert_eq!(default_dataset.schema.take(), DataSchema::default());
-        assert_eq!(default_dataset.last_update, None);
+        assert_eq!(default_dataset.last_update_time, None);
         assert_eq!(default_dataset.update_successful, None);
         assert_eq!(default_dataset.sync_enabled, false);
     }
@@ -250,14 +243,14 @@ mod test {
         let description: String = Paragraph(3..5).fake();
         let endpoint = String::from("/test");
         let create_date: chrono::DateTime<Utc> = DateTimeBefore(ZH_CN, Utc::now()).fake();
-        let last_update: Option<DateTime<Utc>> = None;
+        let last_update_time: Option<DateTime<Utc>> = None;
         let update: Option<bool> = None;
         let api_params: Vec<Rc<RefCell<APIParam>>> = vec![
             Rc::new(RefCell::new(Faker.fake::<APIParam>())),
             Rc::new(RefCell::new(Faker.fake::<APIParam>())),
             Rc::new(RefCell::new(Faker.fake::<APIParam>())),
             Rc::new(RefCell::new(Faker.fake::<APIParam>())),
-            Rc::new(RefCell::new(Faker.fake::<APIParam>()))
+            Rc::new(RefCell::new(Faker.fake::<APIParam>())),
         ];
         println!("api params: {:?}", api_params);
 
@@ -265,15 +258,24 @@ mod test {
         let sync_enabled = true;
 
         let new_dataset = Dataset::new(
-            id, &name, &description, &endpoint, &api_params, schema, create_date,
-            None, None, sync_enabled,
-        ).expect("Creation failed");
+            id,
+            &name,
+            &description,
+            &endpoint,
+            &api_params,
+            schema,
+            create_date,
+            None,
+            None,
+            sync_enabled,
+        )
+        .expect("Creation failed");
 
         assert_eq!(new_dataset.id, id);
         assert_eq!(new_dataset.name, name);
         assert_eq!(new_dataset.description, description);
         assert_eq!(new_dataset.endpoint, endpoint);
-        assert_eq!(new_dataset.last_update, last_update);
+        assert_eq!(new_dataset.last_update_time, last_update_time);
         assert_eq!(new_dataset.update_successful, update);
         assert_eq!(new_dataset.api_params.len(), 5);
     }

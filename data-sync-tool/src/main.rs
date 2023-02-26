@@ -14,6 +14,7 @@ use fake::faker::chrono::raw::*;
 // use fake::locales::*;
 // use fake::locales::ZH_CN;
 // use fake::faker::name::zh_cn::Name;
+mod common;
 mod domain;
 // mod infrastructure;
 // mod presentation;

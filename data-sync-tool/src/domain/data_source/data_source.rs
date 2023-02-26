@@ -3,18 +3,12 @@
 use chrono::prelude::*;
 use fake::{Dummy, Fake};
 use getset::{CopyGetters, Getters, MutGetters, Setters};
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    rc::Rc, error, fmt,
-};
+use std::{cell::RefCell, collections::HashMap, error, fmt, rc::Rc};
 use uuid::Uuid;
 
 use super::dataset::Dataset;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
-
-
 
 // Errors
 #[derive(Debug, Clone)]
@@ -25,12 +19,14 @@ impl fmt::Display for UpdateTimeEarlierThanCreationError {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct UpdateStatusShouldCoexistWithItsDate;
 impl fmt::Display for UpdateStatusShouldCoexistWithItsDate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "If the entity is updated, then it should has an update status.")
+        write!(
+            f,
+            "If the entity is updated, then it should has an update status."
+        )
     }
 }
 
@@ -55,10 +51,10 @@ pub struct DataSource {
     create_date: DateTime<Utc>,
 
     #[getset(get = "pub")]
-    last_update: Option<DateTime<Utc>>,
+    last_update_time: Option<DateTime<Utc>>,
 
     #[getset(get = "pub", set = "pub")]
-    update_successful: Option<bool>, // defaults to true if last_update is provided
+    update_successful: Option<bool>, // defaults to true if last_update_time is provided
 
     #[getset(get = "pub")]
     datasets: HashMap<String, Rc<RefCell<Dataset>>>,
@@ -71,7 +67,7 @@ impl DataSource {
         description: &str,
         api_key: &str,
         create_date: DateTime<Utc>,
-        last_update: Option<DateTime<Utc>>,
+        last_update_time: Option<DateTime<Utc>>,
         update_successful: Option<bool>,
         datasets: &[Rc<RefCell<Dataset>>],
     ) -> Result<Self> {
@@ -82,7 +78,7 @@ impl DataSource {
             id_mapped_datasets.insert(dataset_id, v.clone());
         });
 
-        match last_update {
+        match last_update_time {
             None => {
                 if let Some(_) = update_successful {
                     return Err(Box::new(UpdateStatusShouldCoexistWithItsDate));
@@ -93,7 +89,7 @@ impl DataSource {
                         description: description.to_string(),
                         api_key: api_key.to_string(),
                         create_date,
-                        last_update: None,
+                        last_update_time: None,
                         update_successful: None,
                         datasets: id_mapped_datasets,
                     });
@@ -107,7 +103,7 @@ impl DataSource {
                         description: description.to_string(),
                         api_key: api_key.to_string(),
                         create_date,
-                        last_update: Some(update_dt),
+                        last_update_time: Some(update_dt),
                         update_successful: Some(update_ok),
                         datasets: id_mapped_datasets,
                     });
@@ -118,7 +114,7 @@ impl DataSource {
                         description: description.to_string(),
                         api_key: api_key.to_string(),
                         create_date,
-                        last_update: Some(update_dt),
+                        last_update_time: Some(update_dt),
                         update_successful: Some(false),
                         datasets: id_mapped_datasets,
                     });
@@ -127,22 +123,16 @@ impl DataSource {
         }
     }
 
-    pub fn set_last_update(
-        &mut self,
-        update_dt: DateTime<Utc>,
-    ) -> Result<&mut Self> {
+    pub fn set_last_update_time(&mut self, update_dt: DateTime<Utc>) -> Result<&mut Self> {
         if self.create_date > update_dt {
             Err(Box::new(UpdateTimeEarlierThanCreationError))
         } else {
-            self.last_update = Some(update_dt);
+            self.last_update_time = Some(update_dt);
             Ok(self)
         }
     }
 
-    pub fn add_datasets(
-        &mut self,
-        datasets: &Vec<Rc<RefCell<Dataset>>>,
-    ) -> Result<&mut Self> {
+    pub fn add_datasets(&mut self, datasets: &Vec<Rc<RefCell<Dataset>>>) -> Result<&mut Self> {
         for dataset in datasets {
             self.datasets
                 .insert(dataset.borrow().id().to_string(), dataset.clone());
@@ -201,8 +191,8 @@ impl DataSource {
 impl std::fmt::Display for DataSource {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f,
-               "DataSource(id: {},  name: {}, description: {}, api_key: {}, create_date: {}, last_update: {:?}, update_successful: {:?}, datasets: {:?})",
-               self.id, self.name, self.description, self.api_key, self.create_date.with_timezone(&Local), Some(self.last_update),
+               "DataSource(id: {},  name: {}, description: {}, api_key: {}, create_date: {}, last_update_time: {:?}, update_successful: {:?}, datasets: {:?})",
+               self.id, self.name, self.description, self.api_key, self.create_date.with_timezone(&Local), Some(self.last_update_time),
                Some(self.update_successful), self.datasets)
     }
 }
@@ -215,7 +205,7 @@ impl Default for DataSource {
             description: String::from("Please write a description."),
             api_key: String::from(""),
             create_date: chrono::offset::Utc::now(),
-            last_update: None,
+            last_update_time: None,
             update_successful: None,
             datasets: HashMap::new(),
         }
@@ -242,7 +232,7 @@ mod test {
         let description: String = Paragraph(3..5).fake();
         let api_key = Faker.fake::<String>();
         let create_date: chrono::DateTime<Utc> = DateTimeBefore(ZH_CN, Utc::now()).fake();
-        let last_update: Option<DateTime<Utc>> = None;
+        let last_update_time: Option<DateTime<Utc>> = None;
         let update: Option<bool> = None;
         let datasets: Vec<Rc<RefCell<Dataset>>> = vec![];
 
@@ -252,7 +242,7 @@ mod test {
             &description,
             &api_key,
             create_date,
-            last_update,
+            last_update_time,
             update,
             datasets.as_slice(),
         )
@@ -264,7 +254,7 @@ mod test {
         assert_eq!(empty_datasource.description, description);
         assert_eq!(empty_datasource.api_key, api_key);
         assert_eq!(empty_datasource.create_date, create_date);
-        assert_eq!(empty_datasource.last_update, None);
+        assert_eq!(empty_datasource.last_update_time, None);
         assert_eq!(empty_datasource.update_successful, None);
         assert_eq!(empty_datasource.datasets.len(), 0);
     }
@@ -279,7 +269,10 @@ mod test {
         assert_eq!(*fake_datasource.description(), fake_datasource.description);
         assert_eq!(*fake_datasource.api_key(), fake_datasource.api_key);
         assert_eq!(*fake_datasource.create_date(), fake_datasource.create_date);
-        assert_eq!(*fake_datasource.last_update(), fake_datasource.last_update);
+        assert_eq!(
+            *fake_datasource.last_update_time(),
+            fake_datasource.last_update_time
+        );
         assert_eq!(
             *fake_datasource.update_successful(),
             fake_datasource.update_successful
@@ -301,7 +294,9 @@ mod test {
             target_update_date.with_timezone(&Local)
         );
 
-        fake_datasource.set_last_update(target_update_date).unwrap();
+        fake_datasource
+            .set_last_update_time(target_update_date)
+            .unwrap();
     }
 
     #[test]
@@ -407,13 +402,25 @@ mod test {
         fake_datasource.remove_all_datasets();
         fake_datasource.add_datasets(&test_datasets).unwrap();
 
-        test_datasets[0..3].into_iter().for_each(|d| {
-            d.borrow_mut().set_sync_enabled(true);
+        test_datasets[..=3].into_iter().for_each(|d| {
+            let dataset_id = d.borrow().id().to_string();
+
+            let dataset = fake_datasource.get_datasets_by_ids(&vec![&dataset_id]);
+            let ds = dataset.get(&dataset_id).unwrap();
+            ds.try_borrow_mut().unwrap().set_sync_enabled(true);
         });
 
+        println!("test_datasets[..3] has {} elements.", test_datasets[..=3].len());
+
         test_datasets[4..].into_iter().for_each(|d| {
-            d.borrow_mut().set_sync_enabled(false);
+            let dataset_id = d.borrow().id().to_string();
+
+            let dataset = fake_datasource.get_datasets_by_ids(&vec![&dataset_id]);
+            let ds = dataset.get(&dataset_id).unwrap();
+            ds.try_borrow_mut().unwrap().set_sync_enabled(false);
         });
+
+        println!("test_datasets[4..] has {} elements.", test_datasets[4..].len());
 
         let sync_status_of_datasets: Vec<bool> = test_datasets
             .iter()
@@ -423,6 +430,7 @@ mod test {
         println!("test_datasets sync_enabled: {:?}", sync_status_of_datasets);
 
         let datasets_sync_enabled = fake_datasource.get_datasets_requires_sync();
+        // FIXME: could sometimes fail!
         assert_eq!(datasets_sync_enabled.len(), 4);
     }
 

@@ -2,18 +2,16 @@
 
 use fake::{Dummy, Fake};
 use getset::{Getters, MutGetters};
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::collections::HashMap;
 
 use super::field_type::FieldType;
 use crate::common::errors::Result;
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, MutGetters)]
+#[getset(get = "pub")]
 pub struct Column {
-    #[getset(get = "pub")]
     name: String,
-    #[getset(get = "pub")]
     col_type: FieldType,
-    #[getset(get = "pub")]
     description: String,
 }
 
@@ -31,14 +29,14 @@ impl Column {
 #[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters)]
 pub struct DataSchema {
     #[getset(get = "pub", get_mut = "pub")]
-    columns: HashMap<String, Rc<RefCell<Column>>>,
+    columns: HashMap<String, Column>,
 }
 
 impl DataSchema {
-    pub fn new(columns: &Vec<Rc<RefCell<Column>>>) -> Self {
-        let mut column_map: HashMap<String, Rc<RefCell<Column>>> = HashMap::new();
+    pub fn new(columns: &Vec<Column>) -> Self {
+        let mut column_map: HashMap<String, Column> = HashMap::new();
         for column in columns {
-            column_map.insert(column.as_ref().borrow().name.clone(), column.clone());
+            column_map.insert(column.name().to_string(), column.clone());
         }
 
         Self {
@@ -46,9 +44,9 @@ impl DataSchema {
         }
     }
 
-    pub fn insert_columns(&mut self, columns: &Vec<Rc<RefCell<Column>>>) -> &mut Self {
+    pub fn insert_columns(&mut self, columns: &Vec<Column>) -> &mut Self {
         for col in columns {
-            let key = col.as_ref().borrow().name.clone();
+            let key = col.name().to_string();
             self.columns.insert(key, col.clone());
         }
         return self;

@@ -10,10 +10,10 @@ use super::{
 };
 use chrono::prelude::*;
 use fake::{Dummy, Fake};
-use getset::{Getters, Setters};
+use getset::{Getters, MutGetters, Setters};
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::{cell::RefCell, collections::HashMap, error, fmt, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, error, fmt, sync::Arc};
 use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
@@ -27,7 +27,7 @@ impl fmt::Display for InvalidAPIEndpointFormat {
 }
 impl error::Error for InvalidAPIEndpointFormat {}
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters)]
+#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, MutGetters, Setters)]
 #[readonly::make]
 pub struct Dataset {
     #[getset(get = "pub", set = "pub")]
@@ -39,9 +39,9 @@ pub struct Dataset {
     #[getset(get = "pub", set = "pub")]
     endpoint: String, // web endpoint of this api_param
     #[getset(get = "pub")]
-    api_params: HashMap<String, Rc<RefCell<APIParam>>>, // a hashmap of api arguments
+    api_params: HashMap<String, APIParam>, // a hashmap of api arguments
     #[getset(get = "pub", get_mut = "pub")]
-    schema: Rc<RefCell<DataSchema>>, // schema of this api_param
+    schema: DataSchema, // schema of this api_param
     #[getset(get = "pub", set = "pub")]
     create_date: DateTime<Utc>,
     #[getset(get = "pub")]
@@ -58,16 +58,16 @@ impl Dataset {
         name: &str,
         description: &str,
         endpoint: &str,
-        api_params: &Vec<Rc<RefCell<APIParam>>>,
+        api_params: &Vec<APIParam>,
         schema: DataSchema,
         create_date: DateTime<Utc>,
         last_update_time: Option<DateTime<Utc>>,
         update_successful: Option<bool>,
         sync_enabled: bool,
     ) -> Result<Self> {
-        let mut params_map: HashMap<String, Rc<RefCell<APIParam>>> = HashMap::new();
+        let mut params_map: HashMap<String, APIParam> = HashMap::new();
         api_params.into_iter().for_each(|p| {
-            params_map.insert(p.as_ref().borrow().name().clone(), p.clone());
+            params_map.insert(p.name().clone(), p.clone());
         });
         lazy_static! {
             static ref RE: Regex = Regex::new("^/[a-zA-Z0-9-_]+$").unwrap();
@@ -87,7 +87,7 @@ impl Dataset {
                         description: description.to_string(),
                         endpoint: endpoint.to_string(),
                         api_params: params_map,
-                        schema: Rc::new(RefCell::new(schema)),
+                        schema: schema,
                         create_date,
                         last_update_time: None,
                         update_successful: None,
@@ -103,7 +103,7 @@ impl Dataset {
                         description: description.to_string(),
                         endpoint: endpoint.to_string(),
                         api_params: params_map,
-                        schema: Rc::new(RefCell::new(schema)),
+                        schema: schema,
                         create_date,
                         last_update_time: Some(update_dt),
                         update_successful: Some(update_ok),
@@ -116,7 +116,7 @@ impl Dataset {
                         description: description.to_string(),
                         endpoint: endpoint.to_string(),
                         api_params: params_map,
-                        schema: Rc::new(RefCell::new(schema)),
+                        schema: schema,
                         create_date,
                         last_update_time: Some(update_dt),
                         update_successful: Some(false),
@@ -136,10 +136,10 @@ impl Dataset {
         }
     }
 
-    pub fn add_api_params(&mut self, api_params: &Vec<Rc<RefCell<APIParam>>>) -> Result<&mut Self> {
+    pub fn add_api_params(&mut self, api_params: &Vec<APIParam>) -> Result<&mut Self> {
         for api_param in api_params {
             self.api_params.insert(
-                api_param.as_ref().borrow().name().to_string(),
+                api_param.name().to_string(),
                 api_param.clone(),
             );
         }
@@ -149,8 +149,8 @@ impl Dataset {
     pub fn get_api_params_by_name(
         &self,
         api_param_name: &Vec<&str>,
-    ) -> HashMap<String, Rc<RefCell<APIParam>>> {
-        let mut result_map: HashMap<String, Rc<RefCell<APIParam>>> = HashMap::new();
+    ) -> HashMap<String, APIParam> {
+        let mut result_map: HashMap<String, APIParam> = HashMap::new();
         for name in api_param_name {
             if let Some(matched_param) = self.api_params.get(*name) {
                 result_map.insert(String::from(*name), matched_param.clone());
@@ -171,21 +171,20 @@ impl Dataset {
         return self;
     }
 
-    pub fn add_columns_to_schema(&mut self, columns: &Vec<Rc<RefCell<Column>>>) -> &mut Self {
-        self.schema().as_ref().borrow_mut().insert_columns(columns);
+    pub fn add_columns_to_schema(&mut self, columns: &Vec<Column>) -> &mut Self {
+        self.schema_mut().insert_columns(columns);
+        // self.
         return self;
     }
 
     pub fn remove_columns_from_schema_by_name(&mut self, column_names: &Vec<String>) -> &mut Self {
-        self.schema()
-            .as_ref()
-            .borrow_mut()
+        self.schema_mut()
             .remove_columns_by_name(column_names);
         return self;
     }
 
     pub fn remove_all_columns_from_schema(&mut self) -> &mut Self {
-        self.schema().as_ref().borrow_mut().remove_all_columns();
+        self.schema_mut().remove_all_columns();
         return self;
     }
 }
@@ -198,7 +197,7 @@ impl Default for Dataset {
             description: String::from("Please write a description."),
             endpoint: String::from("/example/endpoint"),
             api_params: HashMap::new(),
-            schema: Rc::new(RefCell::new(DataSchema::default())),
+            schema: DataSchema::default(),
             create_date: chrono::offset::Utc::now(),
             last_update_time: None,
             update_successful: None,
@@ -230,7 +229,7 @@ mod test {
         );
         assert_eq!(default_dataset.endpoint, String::from("/example/endpoint"));
         assert_eq!(default_dataset.api_params.len(), 0);
-        assert_eq!(default_dataset.schema.take(), DataSchema::default());
+        assert_eq!(*default_dataset.schema(), DataSchema::default());
         assert_eq!(default_dataset.last_update_time, None);
         assert_eq!(default_dataset.update_successful, None);
         assert_eq!(default_dataset.sync_enabled, false);
@@ -245,12 +244,12 @@ mod test {
         let create_date: chrono::DateTime<Utc> = DateTimeBefore(ZH_CN, Utc::now()).fake();
         let last_update_time: Option<DateTime<Utc>> = None;
         let update: Option<bool> = None;
-        let api_params: Vec<Rc<RefCell<APIParam>>> = vec![
-            Rc::new(RefCell::new(Faker.fake::<APIParam>())),
-            Rc::new(RefCell::new(Faker.fake::<APIParam>())),
-            Rc::new(RefCell::new(Faker.fake::<APIParam>())),
-            Rc::new(RefCell::new(Faker.fake::<APIParam>())),
-            Rc::new(RefCell::new(Faker.fake::<APIParam>())),
+        let api_params: Vec<APIParam> = vec![
+            Faker.fake::<APIParam>(),
+            Faker.fake::<APIParam>(),
+            Faker.fake::<APIParam>(),
+            Faker.fake::<APIParam>(),
+            Faker.fake::<APIParam>(),
         ];
         println!("api params: {:?}", api_params);
 

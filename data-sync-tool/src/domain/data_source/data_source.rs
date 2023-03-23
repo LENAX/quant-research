@@ -3,10 +3,10 @@
 use chrono::prelude::*;
 use fake::{Dummy, Fake};
 use getset::{CopyGetters, Getters, MutGetters, Setters};
-use std::{cell::RefCell, collections::HashMap, error, fmt, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, error, fmt, sync::Arc};
 use uuid::Uuid;
 
-use super::dataset::Dataset;
+use super::{dataset::Dataset, value_object::local_storage::LocalStorage};
 
 type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
@@ -57,7 +57,10 @@ pub struct DataSource {
     update_successful: Option<bool>, // defaults to true if last_update_time is provided
 
     #[getset(get = "pub")]
-    datasets: HashMap<String, Rc<RefCell<Dataset>>>,
+    datasets: HashMap<String, Dataset>,
+
+    #[getset(get = "pub", set = "pub")]
+    local_storage: LocalStorage,
 }
 
 impl DataSource {
@@ -69,12 +72,12 @@ impl DataSource {
         create_date: DateTime<Utc>,
         last_update_time: Option<DateTime<Utc>>,
         update_successful: Option<bool>,
-        datasets: &[Rc<RefCell<Dataset>>],
+        datasets: &[Dataset],
     ) -> Result<Self> {
-        let mut id_mapped_datasets: HashMap<String, Rc<RefCell<Dataset>>> = HashMap::new();
+        let mut id_mapped_datasets: HashMap<String, Dataset> = HashMap::new();
 
         datasets.into_iter().for_each(|v| {
-            let dataset_id = v.as_ref().borrow().id().to_string();
+            let dataset_id = v.id().to_string();
             id_mapped_datasets.insert(dataset_id, v.clone());
         });
 
@@ -92,6 +95,7 @@ impl DataSource {
                         last_update_time: None,
                         update_successful: None,
                         datasets: id_mapped_datasets,
+                        local_storage: LocalStorage::default(),
                     });
                 }
             }
@@ -106,6 +110,7 @@ impl DataSource {
                         last_update_time: Some(update_dt),
                         update_successful: Some(update_ok),
                         datasets: id_mapped_datasets,
+                        local_storage: LocalStorage::default()
                     });
                 } else {
                     return Ok(Self {
@@ -117,6 +122,7 @@ impl DataSource {
                         last_update_time: Some(update_dt),
                         update_successful: Some(false),
                         datasets: id_mapped_datasets,
+                        local_storage: LocalStorage::default()
                     });
                 }
             }
@@ -132,10 +138,10 @@ impl DataSource {
         }
     }
 
-    pub fn add_datasets(&mut self, datasets: &Vec<Rc<RefCell<Dataset>>>) -> Result<&mut Self> {
+    pub fn add_datasets(&mut self, datasets: &Vec<Dataset>) -> Result<&mut Self> {
         for dataset in datasets {
             self.datasets
-                .insert(dataset.borrow().id().to_string(), dataset.clone());
+                .insert(dataset.id().to_string(), dataset.clone());
         }
         return Ok(self);
     }
@@ -143,8 +149,8 @@ impl DataSource {
     pub fn get_datasets_by_ids(
         &self,
         dataset_ids: &Vec<&str>,
-    ) -> HashMap<String, Rc<RefCell<Dataset>>> {
-        let mut result_map: HashMap<String, Rc<RefCell<Dataset>>> = HashMap::new();
+    ) -> HashMap<String, Dataset> {
+        let mut result_map: HashMap<String, Dataset> = HashMap::new();
         for id in dataset_ids {
             if let Some(matched_ds) = self.datasets.get(*id) {
                 result_map.insert(String::from(*id), matched_ds.clone());
@@ -153,14 +159,14 @@ impl DataSource {
         result_map
     }
 
-    pub fn get_datasets_requires_sync(&self) -> HashMap<String, Rc<RefCell<Dataset>>> {
-        let mut datasets_require_sync: HashMap<String, Rc<RefCell<Dataset>>> = HashMap::new();
+    pub fn get_datasets_requires_sync(&self) -> HashMap<String, Dataset> {
+        let mut datasets_require_sync: HashMap<String, Dataset> = HashMap::new();
         self.datasets
             .iter()
             .filter(|kv| {
                 let ds = kv.1.clone();
-                let ds_ref = ds.as_ref();
-                let need_sync = *ds_ref.borrow().sync_enabled();
+                let ds_ref = ds;
+                let need_sync = *ds_ref.sync_enabled();
                 need_sync
             })
             .for_each(|kv| {
@@ -208,6 +214,7 @@ impl Default for DataSource {
             last_update_time: None,
             update_successful: None,
             datasets: HashMap::new(),
+            local_storage: LocalStorage::default()
         }
     }
 }
@@ -234,7 +241,7 @@ mod test {
         let create_date: chrono::DateTime<Utc> = DateTimeBefore(ZH_CN, Utc::now()).fake();
         let last_update_time: Option<DateTime<Utc>> = None;
         let update: Option<bool> = None;
-        let datasets: Vec<Rc<RefCell<Dataset>>> = vec![];
+        let datasets: Vec<Dataset> = vec![];
 
         let empty_datasource = DataSource::new(
             id,
@@ -244,7 +251,7 @@ mod test {
             create_date,
             last_update_time,
             update,
-            datasets.as_slice(),
+            datasets.as_slice()
         )
         .expect("Update status and update datetime should coexist in a new DataSource object.");
 
@@ -304,13 +311,13 @@ mod test {
         let mut datasource = DataSource::default();
 
         let test_datasets = vec![
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
         ];
 
         let updated_datasource = datasource
@@ -321,11 +328,11 @@ mod test {
             .as_slice()
             .into_iter()
             .map(|ds| {
-                let dataset_id = (*ds.as_ref()).borrow().id().to_string();
+                let dataset_id = ds.id().to_string();
                 let matched_ds = updated_datasource.datasets.get(&dataset_id);
 
                 match matched_ds {
-                    Some(d) => *(*d.as_ref()).borrow() == *(*ds.as_ref()).borrow(),
+                    Some(d) => d == ds,
                     None => false,
                 }
             })
@@ -338,13 +345,13 @@ mod test {
     fn it_should_clear_datasets_as_expected() {
         let mut fake_datasource: DataSource = Faker.fake();
         let test_datasets = vec![
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
         ];
 
         fake_datasource.add_datasets(&test_datasets).unwrap();
@@ -358,13 +365,13 @@ mod test {
     fn it_should_get_datasets_by_ids_as_expected() {
         let mut fake_datasource: DataSource = Faker.fake();
         let test_datasets = vec![
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
         ];
 
         fake_datasource.add_datasets(&test_datasets).unwrap();
@@ -390,41 +397,42 @@ mod test {
     fn it_should_get_datasets_require_sync_as_expected() {
         let mut fake_datasource: DataSource = Faker.fake();
         let test_datasets = vec![
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
         ];
 
         fake_datasource.remove_all_datasets();
         fake_datasource.add_datasets(&test_datasets).unwrap();
 
         test_datasets[..=3].into_iter().for_each(|d| {
-            let dataset_id = d.borrow().id().to_string();
+            let dataset_id = d.id().to_string();
 
-            let dataset = fake_datasource.get_datasets_by_ids(&vec![&dataset_id]);
-            let ds = dataset.get(&dataset_id).unwrap();
-            ds.try_borrow_mut().unwrap().set_sync_enabled(true);
+            let mut dataset = fake_datasource.get_datasets_by_ids(&vec![&dataset_id]);
+            let ds = dataset.get_mut(&dataset_id).unwrap();
+            ds.set_sync_enabled(true);
         });
 
         println!("test_datasets[..3] has {} elements.", test_datasets[..=3].len());
 
         test_datasets[4..].into_iter().for_each(|d| {
-            let dataset_id = d.borrow().id().to_string();
+            let dataset_id = d.id().to_string();
 
-            let dataset = fake_datasource.get_datasets_by_ids(&vec![&dataset_id]);
-            let ds = dataset.get(&dataset_id).unwrap();
-            ds.try_borrow_mut().unwrap().set_sync_enabled(false);
+            let mut dataset = fake_datasource.get_datasets_by_ids(&vec![&dataset_id]);
+            let ds = dataset.get_mut(&dataset_id).unwrap();
+            // dataset./get
+            ds.set_sync_enabled(false);
         });
 
         println!("test_datasets[4..] has {} elements.", test_datasets[4..].len());
 
         let sync_status_of_datasets: Vec<bool> = test_datasets
             .iter()
-            .map(|d| *d.borrow().sync_enabled())
+            .map(|d| *d.sync_enabled())
             .collect();
 
         println!("test_datasets sync_enabled: {:?}", sync_status_of_datasets);
@@ -439,18 +447,18 @@ mod test {
         let mut fake_datasource: DataSource = Faker.fake();
         fake_datasource.remove_all_datasets();
         let test_datasets = vec![
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
-            Rc::new(RefCell::new(Faker.fake::<Dataset>())),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
+            Faker.fake::<Dataset>(),
         ];
         fake_datasource.add_datasets(&test_datasets).unwrap();
         let dataset_ids: Vec<String> = test_datasets[0..3]
             .into_iter()
-            .map(|ds| (*ds.as_ref()).borrow().id().to_string())
+            .map(|ds| ds.id().to_string())
             .collect();
         fake_datasource.remove_dataset_by_ids(&dataset_ids);
         assert_eq!(fake_datasource.datasets.len(), 4);

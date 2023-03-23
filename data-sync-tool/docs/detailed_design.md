@@ -27,7 +27,7 @@ This tool generally follows the DDD design pattern and emphasizes modular decoup
 那么在这个视角下，整个应用可以拆分成3个domain
 
 1. DataSource, 负责描述和管理远程数据源的元数据、本地存储参数和请求参数
-2. RequestArgGeneration, 负责存储、管理和生成同步所需的参数
+2. RequestArgTemplate, 负责存储、管理和生成同步所需的参数
 3. RemoteDataSynchronization，负责管理和控制远程数据源的同步
 
 

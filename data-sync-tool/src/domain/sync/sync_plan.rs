@@ -8,11 +8,11 @@ use uuid::Uuid;
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone)]
 #[readonly::make]
-pub struct SyncManagement {
+pub struct SyncPlan {
     id: Uuid,
 }
 
-impl SyncManagement {
+impl SyncPlan {
     pub fn new(id: Uuid) -> Self {
         Self {
             id

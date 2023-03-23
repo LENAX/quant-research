@@ -3,19 +3,21 @@
 use std::collections::HashMap;
 
 use fake::{Dummy, Fake};
+use getset::{Getters, Setters};
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone)]
-#[readonly::make]
+
+#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, Default)]
+#[getset(get, set, get_mut)]
 pub struct Column {
-    pub name: String,
-    pub col_type: String,
-    pub description: String,
+    name: String,
+    col_type: String,
+    description: String,
 }
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone)]
-#[readonly::make]
+#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, Default)]
+#[getset(get, set, get_mut)]
 pub struct DataSchema {
-    pub columns: HashMap<String, Column>
+    columns: HashMap<String, Column>
 }
 
 impl DataSchema {

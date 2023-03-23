@@ -29,7 +29,7 @@ impl DataSource {
             id,
             name: name.to_string(),
             description: description.to_string(),
-            api_key: description.to_string(),
+            api_key: api_key.to_string(),
             create_date,
             last_update,
             update_successful,

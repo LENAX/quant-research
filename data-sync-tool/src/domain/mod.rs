@@ -1,3 +1,3 @@
-pub mod arg_generation;
+pub mod arg_gen;
 pub mod data_source;
-pub mod data_synchronization;
+pub mod sync;

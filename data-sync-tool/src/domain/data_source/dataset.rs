@@ -5,20 +5,22 @@ use chrono::prelude::*;
 use fake::{Dummy, Fake};
 use std::collections::HashMap;
 use super:: value_object::{api_param::APIParam, data_schema::DataSchema};
+use getset::{Getters, Setters};
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone)]
-#[readonly::make]
+
+#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, Default)]
+#[getset(get, set, get_mut)]
 pub struct Dataset {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-    pub endpoint: String, // web endpoint of this dataset
-    pub params: HashMap<String, APIParam>, // a hashmap of api arguments
-    pub schema: DataSchema,  // schema of this dataset
-    pub create_date: DateTime<Utc>,
-    pub last_update: Option<DateTime<Utc>>,
-    pub update_successful: Option<bool>,
-    pub sync_on: bool,
+    id: String,
+    name: String,
+    description: String,
+    endpoint: String, // web endpoint of this dataset
+    params: HashMap<String, APIParam>, // a hashmap of api arguments
+    schema: DataSchema,  // schema of this dataset
+    create_date: DateTime<Utc>,
+    last_update: Option<DateTime<Utc>>,
+    update_successful: Option<bool>,
+    sync_on: bool,
 }
 
 impl Dataset {

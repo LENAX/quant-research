@@ -9,11 +9,11 @@ use uuid::Uuid;
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone)]
 #[readonly::make]
-pub struct ArgGeneration {
+pub struct ArgTemplate {
     id: Uuid,
 }
 
-impl ArgGeneration {
+impl ArgTemplate {
     pub fn new(id: Uuid) -> Self {
         Self {
             id,

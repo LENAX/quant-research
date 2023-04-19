@@ -28,7 +28,6 @@ impl fmt::Display for InvalidAPIEndpointFormat {
 impl error::Error for InvalidAPIEndpointFormat {}
 
 #[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, MutGetters, Setters)]
-#[readonly::make]
 pub struct Dataset {
     #[getset(get = "pub", set = "pub")]
     id: Uuid,

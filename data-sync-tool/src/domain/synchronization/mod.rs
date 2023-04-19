@@ -1,2 +1,2 @@
 pub mod repository;
-pub mod sync_management;
+pub mod sync_plan;

@@ -1,12 +1,10 @@
-// Sync Management Domain Object Definition
-// Defines sync related configuration
+// Synchronization Plan Definition
+// Defines when synchronization of a dataset should happend
 
 use chrono::prelude::*;
 use fake::{Dummy, Fake};
 use uuid::Uuid;
 use getset::{Getters, Setters};
-
-use crate::domain::data_source::dataset;
 
 // use std::collections::HashMap;
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -21,6 +19,7 @@ pub enum SyncFrequency {
     Yearly
 }
 
+// Synchronization Plan
 #[derive(Debug, PartialEq, Eq, Clone, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncPlan {
@@ -31,13 +30,13 @@ pub struct SyncPlan {
     frequency: SyncFrequency,
     active: bool,
     datasource_id: Option<Uuid>,
-    datasource_name: String,
+    datasource_name: Option<String>,
     dataset_id: Option<Uuid>,
-    dataset_name: String
+    dataset_name: Option<String>,
 }
 
 impl Default for SyncPlan {
-    fn default() {
+    fn default() -> Self {
         return SyncPlan{
             id: Uuid::new_v4(),
             name: String::from("New plan"),
@@ -45,9 +44,9 @@ impl Default for SyncPlan {
             frequency: SyncFrequency::Daily,
             active: false,
             datasource_id: None,
-            datasource_name: String::new(),
+            datasource_name: None,
             dataset_id: None,
-            dataset_name: String::new(),
+            dataset_name: None,
             trigger_time: None,
         }
     }
@@ -67,8 +66,8 @@ impl SyncPlan {
             frequency,
             active,
             datasource_id,
-            datasource_name: datasource_name.to_string(),
-            dataset_name: dataset_name.to_string(),
+            datasource_name: Some(datasource_name.to_string()),
+            dataset_name: Some(dataset_name.to_string()),
             dataset_id,
         }
     }
@@ -76,10 +75,22 @@ impl SyncPlan {
     pub fn set_plan_for(
         &mut self, datasource_id: Uuid, datasource_name: &str,
         dataset_id: Uuid, dataset_name: &str
-    ) -> Self {
+    ) -> &mut Self {
         self.datasource_id = Some(datasource_id);
-        self.datasource_name = datasource_name.to_string();
+        self.datasource_name = Some(datasource_name.to_string());
         self.dataset_id = Some(dataset_id);
-        self.dataset_name = dataset_name.to_string();
+        self.dataset_name = Some(dataset_name.to_string());
+
+        return self;
+    }
+
+    pub fn should_trigger(self) -> bool {
+        match self.trigger_time {
+            Some(trigger_time) => {
+                let now = Utc::now();
+                return now >= trigger_time;
+            },
+            None => return false,
+        }
     }
 }

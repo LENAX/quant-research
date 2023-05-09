@@ -206,16 +206,15 @@ impl std::fmt::Display for DataSource {
 impl Default for DataSource {
     fn default() -> Self {
         Self {
-            id: Uuid::new_v4(),
-            name: String::from("New DataSource"),
-            description: String::from("Please write a description."),
-            api_key: String::from(""),
-            create_date: chrono::offset::Utc::now(),
-            last_update_time: None,
-            update_successful: None,
-            datasets: HashMap::new(),
-            local_storage: LocalStorage::default()
-        }
+            id,
+            name: name.to_string(),
+            description: description.to_string(),
+            api_key: api_key.to_string(),
+            create_date,
+            last_update,
+            update_successful,
+            datasets
+        }  
     }
 }
 

@@ -1,10 +1,8 @@
 //! Local Storage Value Object
 //! 
 use getset::{Getters, Setters};
-use fake::{Dummy, Fake};
 
-
-#[derive(Getters, Setters, Debug, Default, Dummy, Clone, Eq, PartialEq)]
+#[derive(Getters, Setters, Default)]
 #[getset(get, set, get_mut)]
 pub struct LocalStorage {
     host: String,

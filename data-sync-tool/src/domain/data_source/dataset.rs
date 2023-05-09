@@ -10,6 +10,7 @@ use super::{
 };
 use chrono::prelude::*;
 use fake::{Dummy, Fake};
+<<<<<<< HEAD
 use getset::{Getters, MutGetters, Setters};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -49,6 +50,26 @@ pub struct Dataset {
     update_successful: Option<bool>,
     #[getset(get = "pub", set = "pub")]
     sync_enabled: bool,
+=======
+use std::collections::HashMap;
+use super:: value_object::{api_param::APIParam, data_schema::DataSchema};
+use getset::{Getters, Setters};
+
+
+#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, Default)]
+#[getset(get, set, get_mut)]
+pub struct Dataset {
+    id: String,
+    name: String,
+    description: String,
+    endpoint: String, // web endpoint of this dataset
+    params: HashMap<String, APIParam>, // a hashmap of api arguments
+    schema: DataSchema,  // schema of this dataset
+    create_date: DateTime<Utc>,
+    last_update: Option<DateTime<Utc>>,
+    update_successful: Option<bool>,
+    sync_on: bool,
+>>>>>>> 09353a67fcf25b71cc3d9cbf5a315602b2657811
 }
 
 impl Dataset {

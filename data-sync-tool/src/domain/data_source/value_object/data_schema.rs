@@ -4,32 +4,22 @@ use fake::{Dummy, Fake};
 use getset::{Getters, MutGetters};
 use std::collections::HashMap;
 
-use super::field_type::FieldType;
-use crate::common::errors::Result;
+use fake::{Dummy, Fake};
+use getset::{Getters, Setters};
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, MutGetters)]
-#[getset(get = "pub")]
+
+#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, Default)]
+#[getset(get, set, get_mut)]
 pub struct Column {
     name: String,
-    col_type: FieldType,
+    col_type: String,
     description: String,
 }
 
-impl Column {
-    pub fn new(name: &str, col_type: &str, description: &str) -> Result<Self> {
-        let column_type = FieldType::try_from(col_type.to_string())?;
-        Ok(Self {
-            name: name.to_string(),
-            col_type: column_type,
-            description: description.to_string(),
-        })
-    }
-}
-
-#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters)]
+#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, Default)]
+#[getset(get, set, get_mut)]
 pub struct DataSchema {
-    #[getset(get = "pub", get_mut = "pub")]
-    columns: HashMap<String, Column>,
+    columns: HashMap<String, Column>
 }
 
 impl DataSchema {

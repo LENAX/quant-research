@@ -4,10 +4,10 @@ use super::sync_plan::SyncPlan;
 use mockall::predicate::*;
 use mockall::*;
 
-#[automock]
-pub trait SyncManagementRepository {
-    fn by_id(&self, id: &str) -> Result<SyncPlan, String>;
-    fn save(&self, client: SyncPlan);
-    fn next_identity(&self) -> String;
-    fn all(&self) -> Vec<SyncPlan>;
+
+pub trait SyncPlanRepository {
+    fn by_id<'a>(&self, id: &str) -> Result<SyncPlan<'a>, String>;
+    fn save<'a>(&self, client: SyncPlan<'a>);
+    fn next_identity<'a>(&self) -> String;
+    fn all<'a>(&self) -> Vec<SyncPlan<'a>>;
 }

@@ -5,7 +5,8 @@ use getset::{Getters, Setters};
 pub struct Quota {
     max_line_per_request: int,
     max_request_per_minute: int,
-    daily_limit: int
+    daily_limit: int,
+    max_concurrent_task: int
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Getters, Setters)]

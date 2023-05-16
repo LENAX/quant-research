@@ -18,7 +18,7 @@ pub enum SyncStatus {
 
 #[derive(Debug, PartialEq, Eq, Clone, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
-struct SyncTask<'a> {
+pub struct SyncTask<'a> {
     id: Uuid,
     sync_plan_id: Uuid,
     datasource_id: Option<Uuid>,
@@ -29,4 +29,5 @@ struct SyncTask<'a> {
     start_time: Option<DateTime<Utc>>,
     end_time: Option<DateTime<Utc>>,
     spec: TaskSpec<'a>, // data payload and specification of the task
+    result_message: String,
 }

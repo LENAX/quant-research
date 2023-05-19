@@ -2,13 +2,13 @@
 
 use super::field_type::FieldType;
 
-use fake::{Dummy, Fake};
+use fake::{ Fake};
 use getset::{CopyGetters, Getters, MutGetters, Setters};
 use uuid::Uuid;
 
 use crate::common::errors::Result;
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, Setters, MutGetters, CopyGetters)]
+#[derive(Debug,  PartialEq, Eq, Clone, Getters, Setters, MutGetters, CopyGetters)]
 pub struct APIParam {
     #[getset(get = "pub")]
     name: String,

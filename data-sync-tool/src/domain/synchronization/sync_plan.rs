@@ -1,19 +1,29 @@
 // Synchronization Plan Definition
 // Defines when synchronization of a dataset should happend
 
+use std::str::FromStr;
+
 use chrono::prelude::*;
-use fake::{Dummy, Fake};
+use fake::{ Fake};
+use serde_json::Value;
 use uuid::Uuid;
 use getset::{Getters, Setters};
+use url::{Url, ParseError};
+use derivative::Derivative;
+use super::{sync_task::SyncTask, custom_errors::TaskCreationError, value_objects::task_spec::{TaskSpec, RequestMethod}};
+use itertools::izip;
 
-use super::sync_task::SyncTask;
 
-// use std::collections::HashMap;
+
+
+#[derive(Derivative)]
+#[derivative(Default(bound=""))]
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SyncFrequency {
     Continuous,
     PerMinute,
     PerHour,
+    #[derivative(Default)]
     Daily,
     Weekly,
     Monthly,
@@ -22,14 +32,18 @@ pub enum SyncFrequency {
 }
 
 // Synchronization Plan
-#[derive(Debug, PartialEq, Eq, Clone, Getters, Setters)]
+#[derive(Derivative)]
+#[derive(Debug, PartialEq, Eq, Clone, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncPlan<'a> {
     id: Uuid,
+    #[derivative(Default(value="New Plan"))]
     name: String,
+    #[derivative(Default(value="Please add a description"))]
     description: String,
-    trigger_time: Option<DateTime<Utc>>,
+    trigger_time: Option<DateTime<Local>>,
     frequency: SyncFrequency,
+    #[derivative(Default(value="false"))]
     active: bool,
     tasks: Vec<SyncTask<'a>>,
     datasource_id: Option<Uuid>,
@@ -39,28 +53,10 @@ pub struct SyncPlan<'a> {
     param_template_id: Option<Uuid>,
 }
 
-impl Default for SyncPlan<'_> {
-    fn default() -> Self {
-        return SyncPlan{
-            id: Uuid::new_v4(),
-            name: String::from("New plan"),
-            description: String::from("Please complete the plan by adding it to a dataset"),
-            frequency: SyncFrequency::Daily,
-            active: false,
-            tasks: vec![],
-            datasource_id: None,
-            datasource_name: None,
-            dataset_id: None,
-            dataset_name: None,
-            trigger_time: None,
-            param_template_id: None,
-        }
-    }
-}
 
-impl SyncPlan<'_> {
-    pub fn new<'a>(
-        name: &'a str, description: &'a str, trigger_time: Option<DateTime<Utc>>,
+impl<'a> SyncPlan<'a> {
+    pub fn new(
+        name: &'a str, description: &'a str, trigger_time: Option<DateTime<Local>>,
         frequency: SyncFrequency, active: bool, tasks: Vec<SyncTask<'a>>, datasource_id: Option<Uuid>,
         datasource_name: &'a str, dataset_id: Option<Uuid>, dataset_name: &'a str, param_template_id: Option<Uuid>,
     ) -> SyncPlan<'a> {
@@ -95,15 +91,43 @@ impl SyncPlan<'_> {
     pub fn should_trigger(self) -> bool {
         match self.trigger_time {
             Some(trigger_time) => {
-                let now = Utc::now();
+                let now = Local::now();
                 return now >= trigger_time;
             },
             None => return false,
         }
     }
 
-    pub fn create_tasks(&mut self, ) -> &mut Self {
+    pub fn create_tasks(&'a mut self, data_endpoints: &[&str], request_methods: &[&str], payloads: &'a [Option<&Value>]) -> Result<&mut Self, TaskCreationError> {
+        if (data_endpoints.len() != request_methods.len()) && (data_endpoints.len() != payloads.len()) && (request_methods.len() != payloads.len()) {
+            return Err(TaskCreationError::InsufficientArgError);
+        }
 
-        return self;
+        for (endpoint, req_method, payload) in izip!(data_endpoints, request_methods, payloads) {
+            let mut new_task = SyncTask::default();
+            let mut task_spec = TaskSpec::default();
+            let url = match Url::parse(endpoint) {
+                Ok(url) => url,
+                Err(parse_error) => return Err(TaskCreationError::UrlParseError((parse_error)))
+            };
+            let request_method = match RequestMethod::from_str(req_method) {
+                Ok(req_method) => req_method,
+                Err(_err) => return Err(TaskCreationError::InvalidRequestMethod)
+            };
+            task_spec.set_request_endpoint(url)
+                     .set_request_method(request_method)
+                     .set_payload(*payload);
+
+            new_task.set_spec(task_spec)
+                    .set_start_time(Local::now())
+                    .set_dataset_id(self.dataset_id)
+                    .set_dataset_name(self.dataset_name.clone())
+                    .set_datasource_id(self.datasource_id)
+                    .set_datasource_name(self.datasource_name.clone())
+                    .set_sync_plan_id(Some(self.id));
+            self.tasks.push(new_task);
+        }
+
+        return Ok(self);
     }
 }

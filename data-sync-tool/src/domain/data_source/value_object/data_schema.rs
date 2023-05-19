@@ -1,13 +1,13 @@
 // Data Schema Value Object Definition
 
-use fake::{Dummy, Fake};
+use fake::{ Fake};
 use getset::{Getters, MutGetters};
 use std::collections::HashMap;
 
 use super::field_type::FieldType;
 use crate::common::errors::Result;
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters, MutGetters)]
+#[derive(Debug,  PartialEq, Eq, Clone, Getters, MutGetters)]
 #[getset(get = "pub")]
 pub struct Column {
     name: String,
@@ -26,7 +26,7 @@ impl Column {
     }
 }
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone, Getters)]
+#[derive(Debug,  PartialEq, Eq, Clone, Getters)]
 pub struct DataSchema {
     #[getset(get = "pub", get_mut = "pub")]
     columns: HashMap<String, Column>,

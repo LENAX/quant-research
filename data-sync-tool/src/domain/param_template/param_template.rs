@@ -7,12 +7,12 @@
 //! For example, we can have a datetime_generator object that implements AlgorithmicGenerator trait to generate datetime values
 
 // use chrono::prelude::*;
-use fake::{Dummy, Fake};
+use fake::{ Fake};
 use uuid::Uuid;
 
 // use std::collections::HashMap;
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone)]
+#[derive(Debug,  PartialEq, Eq, Clone)]
 #[readonly::make]
 pub struct ParameterTemplate {
     id: Uuid,

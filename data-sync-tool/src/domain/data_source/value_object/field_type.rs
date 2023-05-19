@@ -23,7 +23,7 @@ impl fmt::Display for InvalidFieldType {
 impl error::Error for InvalidFieldType {}
 
 
-#[derive(Debug, Dummy, PartialEq, Eq, Clone)]
+#[derive(Debug,  PartialEq, Eq, Clone)]
 pub enum FieldType {
     String,
     Int,

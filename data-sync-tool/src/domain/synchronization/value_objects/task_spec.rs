@@ -52,6 +52,10 @@ impl<'a> Default for TaskSpec<'a> {
     }
 }
 
+impl<'a> TaskSpec<'a> {
+    
+}
+
 mod test {
 
 }

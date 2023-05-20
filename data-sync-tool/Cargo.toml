@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 actix-web = "4.3.1"
+async-trait = "0.1.68"
 chrono = "0.4.23"
 derivative = "2.2.0"
 fake = {version = "2.5", features=['derive', 'chrono', 'uuid', ]}

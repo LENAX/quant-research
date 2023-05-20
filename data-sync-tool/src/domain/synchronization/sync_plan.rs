@@ -142,7 +142,7 @@ impl<'a> SyncPlan<'a> {
                 .set_dataset_id(self.dataset_id)
                 .set_dataset_name(self.dataset_name.clone())
                 .set_datasource_id(self.datasource_id)
-                .set_datasource_name(self.datasource_name.clone())
+                .set_datasource_name(self.dataset_name.clone())
                 .set_sync_plan_id(Some(self.id));
             self.tasks.push(new_task);
         }

@@ -10,14 +10,15 @@ use uuid::Uuid;
 
 #[derive(Derivative)]
 #[derivative(Default(bound = ""))]
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum SyncStatus {
     #[derivative(Default)]
     Created,
     Pending,
     Running,
-    Finished,
     Failed,
+    Cancelled,
+    Finished,
 }
 
 #[derive(Derivative, Debug, PartialEq, Eq, Clone, Getters, Setters, Default)]
@@ -26,15 +27,15 @@ pub struct SyncTask<'a> {
     id: Uuid,
     sync_plan_id: Option<Uuid>,
     datasource_id: Option<Uuid>,
-    datasource_name: Option<&'a str>,
+    datasource_name: Option<String>,
     dataset_id: Option<Uuid>,
-    dataset_name: Option<&'a str>,
+    dataset_name: Option<String>,
     status: SyncStatus,
     start_time: DateTime<Local>,
     end_time: Option<DateTime<Local>>,
     create_time: DateTime<Local>,
     spec: TaskSpec<'a>, // data payload and specification of the task
-    result_message: Option<&'a str>,
+    result_message: Option<String>,
 }
 
 impl<'a> SyncTask<'a> {
@@ -50,16 +51,39 @@ impl<'a> SyncTask<'a> {
         new_task.set_sync_plan_id(Some(sync_plan_id))
                 .set_dataset_id(Some(dataset_id))
                 .set_datasource_id(Some(datasource_id))
-                .set_dataset_name(Some(dataset_name))
-                .set_datasource_name(Some(datasource_name))
+                .set_dataset_name(Some(dataset_name.to_string()))
+                .set_datasource_name(Some(datasource_name.to_string()))
                 .set_spec(task_spec)
                 .set_create_time(Local::now());
         return new_task;
     }
 
-    pub fn start(self) -> SyncStatus {
+    /// Set task to pending status, waiting to be executed
+    pub fn wait(&mut self) -> SyncStatus {
+        self.set_status(SyncStatus::Pending);
         return self.status;
     }
+
+    /// Set task to running status
+    pub fn start(&mut self) -> SyncStatus {
+        self.set_status(SyncStatus::Running);
+        return self.status;
+    }
+
+    /// Set task to paused status
+    pub fn cancel(&mut self) -> SyncStatus {
+        self.set_status(SyncStatus::Cancelled);
+        return self.status;
+    }
+
+    /// Set task to finished status
+    pub fn finished(&mut self) -> SyncStatus {
+        self.set_status(SyncStatus::Finished);
+        return self.status;
+    }
+
+
+
 }
 
 #[cfg(test)]

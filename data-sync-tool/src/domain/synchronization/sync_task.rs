@@ -82,8 +82,6 @@ impl<'a> SyncTask<'a> {
         return self.status;
     }
 
-
-
 }
 
 #[cfg(test)]

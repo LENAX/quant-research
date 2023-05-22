@@ -4,4 +4,3 @@ pub mod sync_task;
 pub mod value_objects;
 pub mod custom_errors;
 pub mod task_executor;
-pub mod services;

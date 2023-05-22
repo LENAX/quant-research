@@ -7,6 +7,8 @@ use uuid::Uuid;
 pub struct ExecutionResult<'a> {
     sync_plan_id: &'a Uuid,
     task_id: &'a Uuid,
+    dataset_id: &'a Uuid,
+    datasource_id: &'a Uuid,
     data: Value,
     result_message: &'a str,
 }

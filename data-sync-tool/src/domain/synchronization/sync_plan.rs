@@ -7,6 +7,7 @@ use super::{
     custom_errors::TaskCreationError,
     sync_task::SyncTask,
     value_objects::task_spec::{RequestMethod, TaskSpec},
+    value_objects::sync_config::{SyncConfig, self}
 };
 use chrono::prelude::*;
 use derivative::Derivative;
@@ -45,6 +46,7 @@ pub struct SyncPlan<'a> {
     frequency: SyncFrequency,
     #[derivative(Default(value = "false"))]
     active: bool,
+    sync_config: SyncConfig,
     tasks: Vec<SyncTask<'a>>,
     datasource_id: Option<Uuid>,
     datasource_name: Option<String>,
@@ -66,6 +68,7 @@ impl<'a> SyncPlan<'a> {
         dataset_id: Option<Uuid>,
         dataset_name: &'a str,
         param_template_id: Option<Uuid>,
+        sync_config: SyncConfig,
     ) -> SyncPlan<'a> {
         SyncPlan {
             id: Uuid::new_v4(),
@@ -80,6 +83,7 @@ impl<'a> SyncPlan<'a> {
             dataset_name: Some(dataset_name.to_string()),
             dataset_id,
             param_template_id,
+            sync_config
         }
     }
 

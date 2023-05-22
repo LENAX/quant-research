@@ -50,3 +50,38 @@ impl From<ParseError> for TaskCreationError {
         TaskCreationError::UrlParseError(err)
     }
 }
+
+/// Repsitory Errors
+#[derive(Debug)]
+pub enum RepositoryError {
+    ItemNotFound,
+    DuplicateItem,
+    DatabaseConnectionFailed,
+    DataSerializationFailed,
+    PermissionDenied,
+    // Other errors...
+}
+
+impl error::Error for RepositoryError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match *self {
+            RepositoryError::ItemNotFound => None,
+            RepositoryError::DuplicateItem => None,
+            RepositoryError::DatabaseConnectionFailed => None,
+            RepositoryError::DataSerializationFailed => None,
+            RepositoryError::PermissionDenied => None,
+        }
+    }
+}
+
+impl fmt::Display for RepositoryError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            RepositoryError::ItemNotFound => f.write_str("Item not found"),
+            RepositoryError::DuplicateItem => f.write_str("Duplicate item found"),
+            RepositoryError::DatabaseConnectionFailed => f.write_str("Failed to connect to the database"),
+            RepositoryError::DataSerializationFailed => f.write_str("Failed to serialize data"),
+            RepositoryError::PermissionDenied => f.write_str("Permission denied"),
+        }
+    }
+}

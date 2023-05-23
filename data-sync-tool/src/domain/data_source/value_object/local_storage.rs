@@ -22,8 +22,4 @@ impl LocalStorage {
             password: password.to_string()
         }
     }
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 09353a67fcf25b71cc3d9cbf5a315602b2657811

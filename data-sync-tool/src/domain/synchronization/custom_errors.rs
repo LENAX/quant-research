@@ -85,3 +85,18 @@ impl fmt::Display for RepositoryError {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct RequestMethodParsingError;
+
+impl fmt::Display for RequestMethodParsingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "could not parse the provided string into a valid request method! Accepts: 'get', 'Get', 'GET', 'post', 'POST', 'Post'")
+    }
+}
+
+impl error::Error for RequestMethodParsingError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        None
+    }
+}

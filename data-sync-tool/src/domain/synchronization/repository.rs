@@ -4,12 +4,13 @@ use super::{sync_plan::SyncPlan, custom_errors::RepositoryError, sync_task::Sync
 use async_trait::async_trait;
 use mockall::predicate::*;
 use uuid::Uuid;
+use tokio::sync::RwLock;
 
 #[async_trait]
-pub trait SyncPlanRepository {
+pub trait SyncPlanRepository: Send + Sync {
     // Read
     // Plan
-    async fn get_plan_by_id<'a>(&self, id: &Uuid) -> Result<SyncPlan<'a>, RepositoryError>;
+    async fn get_plan_by_id<'a>(&self, id: RwLock<&Uuid>) -> Result<SyncPlan<'a>, RepositoryError>;
     async fn get_plan_by_dataset_id<'a>(&self, dataset_id: &Uuid) -> Result<SyncPlan<'a>, RepositoryError>;
     async fn get_plan_by_dataset_name<'a>(&self, dataset_name: &str) -> Result<SyncPlan<'a>, RepositoryError>;
     async fn get_plans_by_datasource_id<'a>(&self, datasource_id: &Uuid) -> Result<Vec<SyncPlan<'a>>, RepositoryError>;

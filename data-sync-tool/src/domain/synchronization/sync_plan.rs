@@ -6,7 +6,7 @@ use std::str::FromStr;
 use super::{
     custom_errors::TaskCreationError,
     sync_task::SyncTask,
-    value_objects::task_spec::{RequestMethod, TaskSpec},
+    value_objects::task_spec::{RequestMethod, TaskSpecification},
     value_objects::sync_config::{SyncConfig, self}
 };
 use chrono::prelude::*;
@@ -126,7 +126,7 @@ impl<'a> SyncPlan<'a> {
 
         for (endpoint, req_method, payload) in izip!(data_endpoints, request_methods, payloads) {
             let mut new_task = SyncTask::default();
-            let mut task_spec = TaskSpec::default();
+            let mut task_spec = TaskSpecification::default();
             let url = match Url::parse(endpoint) {
                 Ok(url) => url,
                 Err(parse_error) => return Err(TaskCreationError::UrlParseError((parse_error))),

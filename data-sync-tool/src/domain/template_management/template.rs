@@ -14,11 +14,11 @@ use uuid::Uuid;
 
 #[derive(Debug,  PartialEq, Eq, Clone)]
 #[readonly::make]
-pub struct ParameterTemplate {
+pub struct Template {
     id: Uuid,
 }
 
-impl ParameterTemplate {
+impl Template {
     pub fn new(id: Uuid) -> Self {
         Self { id }
     }

@@ -3,7 +3,7 @@
 
 use chrono::prelude::*;
 // use fake::{ Fake};
-use super::value_objects::task_spec::TaskSpec;
+use super::value_objects::task_spec::TaskSpecification;
 use derivative::Derivative;
 use getset::{Getters, Setters};
 use uuid::Uuid;
@@ -34,7 +34,7 @@ pub struct SyncTask<'a> {
     start_time: DateTime<Local>,
     end_time: Option<DateTime<Local>>,
     create_time: DateTime<Local>,
-    spec: TaskSpec<'a>, // data payload and specification of the task
+    spec: TaskSpecification<'a>, // data payload and specification of the task
     result_message: Option<String>,
 }
 
@@ -44,7 +44,7 @@ impl<'a> SyncTask<'a> {
         dataset_name: &str,
         datasource_id: Uuid,
         datasource_name: &str,
-        task_spec: TaskSpec<'a>,
+        task_spec: TaskSpecification<'a>,
         sync_plan_id: Uuid,
     ) -> Self {
         let mut new_task = Self::default();

@@ -10,7 +10,7 @@ use regex::Regex;
 lazy_static! {
     static ref STRING_ARG_TYPE_PATTERN: Regex = Regex::new("^str|string|String$").unwrap();
     static ref INT_ARG_TYPE_PATTERN: Regex = Regex::new("^int|Integer$").unwrap();
-    static ref FLOAT_ARG_TYPE_PATTERN: Regex = Regex::new("^int|Integer$").unwrap();
+    static ref FLOAT_ARG_TYPE_PATTERN: Regex = Regex::new("^float|Float$").unwrap();
 }
 
 #[derive(Debug, Clone)]

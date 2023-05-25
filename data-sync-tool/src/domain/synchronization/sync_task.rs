@@ -3,7 +3,7 @@
 
 use chrono::prelude::*;
 // use fake::{ Fake};
-use super::value_objects::task_spec::TaskSpecification;
+use super::{value_objects::task_spec::TaskSpecification, sync_plan::CreateTaskRequest};
 use derivative::Derivative;
 use getset::{Getters, Setters};
 use uuid::Uuid;
@@ -36,6 +36,16 @@ pub struct SyncTask<'a> {
     create_time: DateTime<Local>,
     spec: TaskSpecification<'a>, // data payload and specification of the task
     result_message: Option<String>,
+}
+
+impl<'a> From<&'a CreateTaskRequest<'a>> for SyncTask<'a> {
+    fn from(req: &'a CreateTaskRequest<'a>) -> Self {
+        let mut new_task = Self::default();
+        let task_spec: TaskSpecification<'a> = req.into();
+
+        new_task.set_spec(task_spec);
+        return new_task;
+    }
 }
 
 impl<'a> SyncTask<'a> {

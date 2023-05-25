@@ -2,7 +2,6 @@
 
 use super::{sync_plan::SyncPlan, custom_errors::RepositoryError, sync_task::SyncTask};
 use async_trait::async_trait;
-use mockall::predicate::*;
 use uuid::Uuid;
 use tokio::sync::RwLock;
 

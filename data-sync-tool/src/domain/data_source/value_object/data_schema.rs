@@ -1,11 +1,9 @@
 // Data Schema Value Object Definition
 
-use fake::{ Fake};
 use getset::{Getters, MutGetters};
-use std::collections::HashMap;
+use std::{collections::HashMap, error::Error, str::FromStr};
 
 use super::field_type::FieldType;
-use crate::common::errors::Result;
 
 #[derive(Debug,  PartialEq, Eq, Clone, Getters, MutGetters)]
 #[getset(get = "pub")]
@@ -16,8 +14,8 @@ pub struct Column {
 }
 
 impl Column {
-    pub fn new(name: &str, col_type: &str, description: &str) -> Result<Self> {
-        let column_type = FieldType::try_from(col_type.to_string())?;
+    pub fn new(name: &str, col_type: &str, description: &str) -> Result<Self, Box<dyn Error>> {
+        let column_type = FieldType::from_str(col_type)?;
         Ok(Self {
             name: name.to_string(),
             col_type: column_type,

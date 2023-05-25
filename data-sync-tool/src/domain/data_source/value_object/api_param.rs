@@ -1,12 +1,11 @@
 // APIParams Value Object Definition
 
-use super::field_type::FieldType;
+use std::{error::Error, str::FromStr};
 
-use fake::{ Fake};
+use super::field_type::FieldType;
 use getset::{CopyGetters, Getters, MutGetters, Setters};
 use uuid::Uuid;
 
-use crate::common::errors::Result;
 
 #[derive(Debug,  PartialEq, Eq, Clone, Getters, Setters, MutGetters, CopyGetters)]
 pub struct APIParam {
@@ -29,8 +28,8 @@ impl APIParam {
         arg_type: &str,
         required: bool,
         template_id: Option<Uuid>,
-    ) -> Result<Self> {
-        let param_arg_type = FieldType::try_from(arg_type.to_string())?;
+    ) -> Result<Self, Box<dyn Error>> {
+        let param_arg_type = FieldType::from_str(arg_type)?;
 
         Ok(Self {
             name: name.to_string(),

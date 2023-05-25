@@ -13,5 +13,5 @@ pub struct RateQuota {
 #[derive(Derivative, Debug, PartialEq, Eq, Clone, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncConfig {
-    sync_RateQuota: RateQuota
+    sync_rate_quota: RateQuota
 }

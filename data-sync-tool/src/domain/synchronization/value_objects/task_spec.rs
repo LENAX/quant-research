@@ -1,7 +1,7 @@
 //! Task Specification
 //! Contains the necessary data of performing data synchronization
 
-use std::{str::FromStr, error::Error, string::ParseError};
+use std::{str::FromStr, error::Error, string::ParseError, collections::HashMap, hash::Hash};
 
 use getset::{Getters, Setters};
 use serde_json::Value;
@@ -41,6 +41,7 @@ impl FromStr for RequestMethod {
 pub struct TaskSpecification<'a> {
     request_endpoint: Url,
     request_method: RequestMethod,
+    request_header: HashMap<&'a str, &'a str>,
     payload: Option<&'a Value>
 }
 
@@ -49,18 +50,20 @@ impl<'a> Default for TaskSpecification<'a> {
         Self {
             request_endpoint: Url::parse("http://localhost/").unwrap(),
             request_method: RequestMethod::Get,
+            request_header: HashMap::new(),
             payload: None
         }
     }
 }
 
 impl<'a> TaskSpecification<'a> {
-    pub fn new(url: &'a str, request_method: &'a str, payload: Option<&'a Value>) -> Result<Self, Box<dyn Error>>  {
+    pub fn new(url: &'a str, request_method: &'a str, request_header: HashMap<&'a str, &'a str>, payload: Option<&'a Value>) -> Result<Self, Box<dyn Error>>  {
         let parsed_url = Url::parse(url)?;
         let request_method = RequestMethod::from_str(request_method)?;
 
         return Ok(Self {
             request_endpoint: parsed_url,
+            request_header,
             request_method,
             payload
         });

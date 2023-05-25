@@ -1,23 +1,13 @@
 //! Schema Enum Definition
 //! Defines data types supported by the data synchronization tool
 
-use std::{error, fmt};
-
-use fake::{Dummy};
-use lazy_static::lazy_static;
-use regex::Regex;
-
-lazy_static! {
-    static ref STRING_ARG_TYPE_PATTERN: Regex = Regex::new("^str|string|String$").unwrap();
-    static ref INT_ARG_TYPE_PATTERN: Regex = Regex::new("^int|Integer$").unwrap();
-    static ref FLOAT_ARG_TYPE_PATTERN: Regex = Regex::new("^int|Integer$").unwrap();
-}
+use std::{error, fmt, str::FromStr};
 
 #[derive(Debug, Clone)]
 pub struct InvalidFieldType;
 impl fmt::Display for InvalidFieldType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "FieldType can only be one of String, Int, and Float!")
+        write!(f, "Unrecognized type!")
     }
 }
 impl error::Error for InvalidFieldType {}
@@ -28,20 +18,23 @@ pub enum FieldType {
     String,
     Int,
     Float,
+    Double,
+    Datetime,
+    Date
 }
 
-impl TryFrom<String> for FieldType {
-    type Error = InvalidFieldType;
+impl FromStr for FieldType {
+    type Err = InvalidFieldType;
 
-    fn try_from(value: String) -> std::result::Result<FieldType, InvalidFieldType> {
-        if STRING_ARG_TYPE_PATTERN.is_match(&value) {
-            Ok(FieldType::String)
-        } else if INT_ARG_TYPE_PATTERN.is_match(&value) {
-            Ok(FieldType::Int)
-        } else if FLOAT_ARG_TYPE_PATTERN.is_match(&value) {
-            Ok(FieldType::Float)
-        } else {
-            Err(InvalidFieldType)
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "str" | "String" | "string" | "STRING" | "Str" | "STR" => Ok(FieldType::String),
+            "int" | "Int" | "Integer" | "INT" | "integer" | "i32" | "i64" | "uint" => Ok(FieldType::Int),
+            "float" | "Float" | "FLOAT" => Ok(FieldType::Float),
+            "double" | "Double" => Ok(FieldType::Double),
+            "datetime" | "Datetime" => Ok(FieldType::Datetime),
+            "Date" | "date" => Ok(FieldType::Date),
+            _ => Err(InvalidFieldType)
         }
     }
 }

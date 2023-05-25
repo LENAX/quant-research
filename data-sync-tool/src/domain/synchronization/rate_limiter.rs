@@ -2,8 +2,11 @@
 /// Defines the common interface for task execution 
 use std::error::Error;
 
-use super::{sync_task::SyncTask, value_objects::execution_result::ExecutionResult};
+use crate::infrastructure::web::request::Request;
+use super::value_objects::sync_config::RateQuota;
+
 
 pub trait RateLimiter {
-    fn limit(&mut self, tasks: &[SyncTask]) -> Result<(), Box<dyn Error>>;
+    fn apply_limit(&mut self, quota: &RateQuota) -> &mut Self;
+    fn limit(&mut self, request: &Request) -> Result<bool, Box<dyn Error>>;
 }

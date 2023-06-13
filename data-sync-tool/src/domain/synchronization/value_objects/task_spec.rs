@@ -8,7 +8,7 @@ use serde_json::Value;
 use derivative::Derivative;
 use url::Url;
 
-use crate::domain::synchronization::custom_errors::RequestMethodParsingError;
+use crate::domain::synchronization::{custom_errors::RequestMethodParsingError, sync_plan::CreateTaskRequest};
 
 #[derive(Derivative)]
 #[derivative(Default(bound=""))]
@@ -52,6 +52,17 @@ impl<'a> Default for TaskSpecification<'a> {
             request_method: RequestMethod::Get,
             request_header: HashMap::new(),
             payload: None
+        }
+    }
+}
+
+impl<'a> From<&'a CreateTaskRequest<'a>> for TaskSpecification<'a> {
+    fn from(value: &'a CreateTaskRequest<'a>) -> Self {
+        Self { 
+            request_endpoint: value.url().clone(), 
+            request_method: value.request_method().clone(), 
+            request_header: value.request_header().clone(), 
+            payload: value.payload().clone()
         }
     }
 }

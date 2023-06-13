@@ -1,13 +1,13 @@
 // Synchronization Plan Definition
 // Defines when synchronization of a dataset should happend
 
-use std::str::FromStr;
+use std::{str::FromStr, collections::HashMap};
 
 use super::{
     custom_errors::TaskCreationError,
     sync_task::SyncTask,
+    value_objects::sync_config::{self, SyncConfig},
     value_objects::task_spec::{RequestMethod, TaskSpecification},
-    value_objects::sync_config::{SyncConfig, self}
 };
 use chrono::prelude::*;
 use derivative::Derivative;
@@ -31,6 +31,15 @@ pub enum SyncFrequency {
     Monthly,
     Quarterly,
     Yearly,
+}
+
+#[derive(Derivative, Debug, PartialEq, Eq, Clone, Getters, Setters)]
+#[getset(get = "pub", set = "pub")]
+pub struct CreateTaskRequest<'a> {
+    url: Url,
+    request_method: RequestMethod,
+    request_header: HashMap<&'a str, &'a str>,
+    payload: Option<&'a Value>,
 }
 
 // Synchronization Plan
@@ -83,7 +92,7 @@ impl<'a> SyncPlan<'a> {
             dataset_name: Some(dataset_name.to_string()),
             dataset_id,
             param_template_id,
-            sync_config
+            sync_config,
         }
     }
 
@@ -114,34 +123,12 @@ impl<'a> SyncPlan<'a> {
 
     pub fn create_tasks(
         &'a mut self,
-        data_endpoints: &[&str],
-        request_methods: &[&str],
-        payloads: &'a [Option<&Value>],
+        requests: &'a [CreateTaskRequest<'a>],
     ) -> Result<&mut Self, TaskCreationError> {
-        if (data_endpoints.len() != request_methods.len())
-            && (data_endpoints.len() != payloads.len())
-            && (request_methods.len() != payloads.len()) {
-            return Err(TaskCreationError::InsufficientArgError);
-        }
-
-        for (endpoint, req_method, payload) in izip!(data_endpoints, request_methods, payloads) {
-            let mut new_task = SyncTask::default();
-            let mut task_spec = TaskSpecification::default();
-            let url = match Url::parse(endpoint) {
-                Ok(url) => url,
-                Err(parse_error) => return Err(TaskCreationError::UrlParseError((parse_error))),
-            };
-            let request_method = match RequestMethod::from_str(req_method) {
-                Ok(req_method) => req_method,
-                Err(_err) => return Err(TaskCreationError::InvalidRequestMethod),
-            };
-            task_spec
-                .set_request_endpoint(url)
-                .set_request_method(request_method)
-                .set_payload(*payload);
+        for request in requests {
+            let mut new_task = SyncTask::from(request);
 
             new_task
-                .set_spec(task_spec)
                 .set_start_time(Local::now())
                 .set_dataset_id(self.dataset_id)
                 .set_dataset_name(self.dataset_name.clone())

@@ -7,6 +7,7 @@ use super::{value_objects::task_spec::TaskSpecification, sync_plan::CreateTaskRe
 use derivative::Derivative;
 use getset::{Getters, Setters};
 use uuid::Uuid;
+use serde_json::Value;
 
 #[derive(Derivative)]
 #[derivative(Default(bound = ""))]
@@ -35,6 +36,7 @@ pub struct SyncTask<'a> {
     end_time: Option<DateTime<Local>>,
     create_time: DateTime<Local>,
     spec: TaskSpecification<'a>, // data payload and specification of the task
+    result: Option<Value>,
     result_message: Option<String>,
 }
 
@@ -83,6 +85,11 @@ impl<'a> SyncTask<'a> {
     /// Set task to paused status
     pub fn cancel(&mut self) -> SyncStatus {
         self.set_status(SyncStatus::Cancelled);
+        return self.status;
+    }
+
+    pub fn failed(&mut self) -> SyncStatus {
+        self.set_status(SyncStatus::Failed);
         return self.status;
     }
 

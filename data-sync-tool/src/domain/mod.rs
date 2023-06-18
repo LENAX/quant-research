@@ -1,3 +1,3 @@
 pub mod data_source;
-pub mod template_management;
+pub mod arg_generation;
 pub mod synchronization;

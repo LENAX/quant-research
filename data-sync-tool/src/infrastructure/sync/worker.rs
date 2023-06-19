@@ -1,20 +1,23 @@
 //! Synchronization Worker
 //! Handles synchronization task and sends web requests to remote data vendors
-//! 
+//!
 
-use std::error::Error;
+use std::{collections::HashMap, error::Error, str::FromStr};
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use reqwest::Client;
 use getset::{Getters, Setters};
+use reqwest::{Client, RequestBuilder};
 use serde_json::Value;
 use url::Url;
 
-use log::{info, error};
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+use log::{error, info};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
-use crate::domain::synchronization::{sync_task::{SyncTask, SyncStatus}, value_objects::task_spec::RequestMethod};
+use crate::domain::synchronization::{
+    sync_task::{SyncStatus, SyncTask},
+    value_objects::task_spec::RequestMethod,
+};
 
 #[async_trait]
 pub trait SyncWorker: Send + Sync {
@@ -23,6 +26,46 @@ pub trait SyncWorker: Send + Sync {
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>>;
 }
 
+fn build_headers(header_map: &HashMap<&str, &str>) -> HeaderMap {
+    let header: HeaderMap = header_map
+        .iter()
+        .map(|(name, val)| {
+            (
+                HeaderName::from_str(name.to_lowercase().as_ref()),
+                HeaderValue::from_str(val.as_ref()),
+            )
+        })
+        .filter(|(k, v)| k.is_ok() && v.is_ok())
+        .map(|(k, v)| (k.unwrap(), v.unwrap()))
+        .collect();
+    return header;
+}
+
+fn build_request(http_client: &Client, url: &str, request_method: RequestMethod, headers: Option<HeaderMap>, params: Option<&Value>) -> RequestBuilder {
+    match request_method {
+        RequestMethod::Get => {
+            let mut request = http_client.get(url);
+            if let Some(params) = params {
+                let new_url = format!("{}?{}", url, params);
+                request = http_client.get(new_url);
+            }
+            if let Some(headers) = headers {
+                request = request.headers(headers);
+            }
+            return request;
+        },
+        RequestMethod::Post => {
+            let mut request = http_client.post(url);
+            if let Some(headers) = headers {
+                request = request.headers(headers);
+            }
+            if let Some(params) = params {
+                request = request.json(params);
+            }
+            return request;
+        }
+    }
+}
 
 #[derive(Derivative)]
 #[derivative(Default(bound = ""))]
@@ -36,7 +79,7 @@ pub enum WorkerState {
 #[getset(get = "pub", set = "pub")]
 pub struct WebAPISyncWorker {
     state: WorkerState,
-    http_client: Client
+    http_client: Client,
 }
 
 #[async_trait]
@@ -45,157 +88,139 @@ impl SyncWorker for WebAPISyncWorker {
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>> {
         self.state = WorkerState::Working;
         sync_task.start();
-        match sync_task.spec().request_method() {
-            RequestMethod::Get => {
-                let mut get_request = self.http_client
-                    .get(sync_task.spec().request_endpoint().to_string());
-                // if sync_task.spec().request_header().len() > 0 {
-                //     let mut header_map = HeaderMap::new();
-                //     for (key, value) in sync_task.spec().request_header() {
-                //         let header_key = String::from(*key);
-                //         header_map.insert(header_key.as_str(), HeaderValue::from_str(value)?);
-                //     }
-                //     get_request = get_request.headers(header_map);
-                // }
-                if let Some(get_param) = *sync_task.spec().payload() {
-                    let new_url = format!("{}?{}",sync_task.spec().request_endpoint().to_string(), get_param);
-                    get_request = self.http_client
-                                      .get(new_url);
-                }
+        let headers = build_headers(sync_task.spec().request_header());
+        let request = build_request(
+            &self.http_client, 
+            sync_task.spec().request_endpoint().as_str(),
+            sync_task.spec().request_method().to_owned(),
+            Some(headers),
+            *sync_task.spec().payload()
+        );
+        let resp = request.send().await;
 
-                let resp = get_request.send().await;
-                
-                match resp {
-                    Ok(resp) => {
-                        info!("status: {}", resp.status());
-                        let json: Value = resp.json().await?;
-                        sync_task.set_result(Some(json))
-                                 .set_end_time(Some(chrono::offset::Local::now()))
-                                 .finished();
-                        return Ok(());
-                    },
-                    Err(error) => {
-                        error!("error: {}", error);
-                        sync_task.set_end_time(Some(chrono::offset::Local::now()))
-                                 .set_result_message(Some(error.to_string()))
-                                 .failed();
-                        return Err(Box::new(error));
-                    }
-                }
-            },
-            RequestMethod::Post => {
-                let mut post_request = self.http_client.post(sync_task.spec().request_endpoint().to_string());
-                // if sync_task.spec().request_header().len() > 0 {
-                //     let mut header_map = HeaderMap::new();
-                //     for (key, value) in sync_task.spec().request_header() {
-                //         header_map.insert(key.clone(), HeaderValue::from_str(value)?);
-                //     }
-                //     post_request = post_request.headers(header_map);
-                // }
-                if let Some(get_param) = *sync_task.spec().payload() {
-                    post_request = post_request.json(get_param);
-                }
-
-                let resp = post_request.send().await;
-                match resp {
-                    Ok(resp) => {
-                        info!("status: {}", resp.status());
-                        let json: Value = resp.json().await?;
-                        sync_task.set_result(Some(json))
-                                 .set_end_time(Some(chrono::offset::Local::now()))
-                                 .finished();
-                        return Ok(());
-                    },
-                    Err(error) => {
-                        error!("error: {}", error);
-                        sync_task.set_end_time(Some(chrono::offset::Local::now()))
-                                 .set_result_message(Some(error.to_string()))
-                                 .failed();
-                        return Err(Box::new(error));
-                    }
-                }
-            },
-            
+        match resp {
+            Ok(resp) => {
+                info!("status: {}", resp.status());
+                let json: Value = resp.json().await?;
+                sync_task
+                    .set_result(Some(json))
+                    .set_end_time(Some(chrono::offset::Local::now()))
+                    .finished();
+                return Ok(());
+            }
+            Err(error) => {
+                error!("error: {}", error);
+                sync_task
+                    .set_end_time(Some(chrono::offset::Local::now()))
+                    .set_result_message(Some(error.to_string()))
+                    .failed();
+                return Err(Box::new(error));
+            }
         }
-        // return Ok(sync_task);
     }
 }
 
 impl WebAPISyncWorker {
     fn new(http_client: Client) -> WebAPISyncWorker {
-        return Self { state: WorkerState::Sleeping, http_client }
+        return Self {
+            state: WorkerState::Sleeping,
+            http_client,
+        };
     }
+
+    
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use crate::{infrastructure::sync::worker::{WebAPISyncWorker, SyncWorker}, domain::synchronization::{sync_task::SyncTask, value_objects::task_spec::{TaskSpecification, RequestMethod}}};
-    use serde_json::Value;
-    use url::Url;
+    use crate::{
+        domain::synchronization::{
+            sync_task::SyncTask,
+            value_objects::task_spec::{RequestMethod, TaskSpecification},
+        },
+        infrastructure::sync::worker::{SyncWorker, WebAPISyncWorker, build_headers, build_request},
+    };
     use polars::prelude::*;
-    use std::io::Cursor;
+    use serde_json::Value;
     use std::fs::File;
     use std::io::BufReader;
-
-    #[test]
-    fn it_should_read_json_as_df() {
-        let mut file = File::open("D:\\pprojects\\quant-research\\data-sync-tool\\data\\stock_list.json").unwrap();
-
-        // Create a DataFrame
-        let df = JsonReader::new(&mut file).finish().unwrap();
-        println!("df: {:?}", df);
-    }
+    use std::io::Cursor;
+    use url::Url;
+    use serde_json::json;
 
     #[tokio::test]
-    async fn it_should_send_request() {
+    async fn it_should_build_and_send_a_post_request() {
         let client = reqwest::Client::new();
-        let mut test_worker = WebAPISyncWorker::new(client);
-        let url = Url::parse("http://api.tushare.pro").unwrap();
-        let data = r#"
-        {
+        let payload = json!({
             "api_name": "stock_basic",
             "token": "a11e32e820d49141b0bcff711d6c4d66dda7e69d228ed0ac20d22750",
             "params": {
                 "list_stauts": "L"
             },
             "fields": "ts_code,name,area,industry,list_date"
-        }"#;
-        let payload: Value = serde_json::from_str(data).unwrap();
-        let spec = TaskSpecification::new(url.as_str(), "post", HashMap::new(), Some(&payload)).unwrap();
-        let mut test_task = SyncTask::default();
-        test_task.set_spec(spec);
-        let result = test_worker.handle(&mut test_task).await;
+        });
+        let request = build_request(
+            &client, 
+            "http://api.tushare.pro", 
+            RequestMethod::Post, 
+            None,
+            Some(&payload),
+        );
+        let resp = request.send().await;
+        match resp {
+            Ok(resp) => {
+                println!("status: {}", resp.status());
+                let json: Result<Value, reqwest::Error> = resp.json().await;
 
-        match result {
-            Ok(()) => {
-                let data = test_task.result();
-                if let Some(data) = data {
-                    if let Some(map) = data.as_object() {
-                        for key in map.keys() {
-                            println!("key: {}", key);
-                        }
-                        if let Some(data_value) = map.get("data") {
-                            let data_string = serde_json::to_string(&data_value).unwrap();
-                            println!("Data: {:?}", &data_string[0..120]);
-                            // let reader = Cursor::new(data_string);
-                            // let df = JsonReader::new(reader).finish().unwrap();
-                            // println!("df: {:?}", df);
-                            // if let Some(items) = data_value.get("items") {
-                            //     let data_string = serde_json::to_string(&items).unwrap();
-                            //     println!("Data: {:?}", &data_string[0..100]);
-                            //     let reader = Cursor::new(data_string);
-                            //     let df = JsonReader::new(reader).finish().unwrap();
-                            //     println!("df: {:?}", df);
-                            // }
-                        }
-                    }
+                if let Ok(json) = json {
+                    println!("value: {:?}", json);
                 }
-            },
-            Err(err) => {
-                eprint!("err: {}", err);
+                return ();
+            }
+            Err(error) => {
+                eprintln!("error: {}", error);
             }
         }
     }
-} 
+
+    #[test]
+    fn it_should_build_header_from_hashmap() {
+        let hashmap: HashMap<&str, &str> = [
+            ("Cookie", "_gh_sess=73%2FX%2F0EoXU1Tj4slthgAt%2B%2BQIdQJekXSbcXBbFfDv0erH%2BHv0oPGtZ7hfDCNpHVtEpFs%2BJcMXgCjK%2BFUG%2BrKS6v6rOAZeZF%2B0bMyia%2BNhr5HmavEbo5y8NbKY0xtXw966S%2FY9ILmNDD%2FZYSUfLX0fIcr1z7Fj5VGeEOeqXLlKtDuH8Y6Cqc%2F1kMpZ3A0uJCTKnKHmi4VmWPDNvkuMDPRNqc6DodQdUOA7w5rEzsqSn2aHjf3C1znSmGss1BNyE1jRreBpGNkjP3PaCJnyNgByOuu%2BHYFhOm3kA%3D%3D--NTzXHWgMFd29sCbV--lLZIz%2FqJxMV%2FxR0JGQEYFg%3D%3D; path=/; secure; HttpOnly; SameSite=Lax"),
+            ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")]
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect();
+
+        let header_map = build_headers(&hashmap);
+        println!("header map: {:?}", header_map);
+    }
+
+    #[tokio::test]
+    async fn it_should_send_request() {
+        let client = reqwest::Client::new();
+        let mut test_worker = WebAPISyncWorker::new(client);
+        let payload = json!({
+            "api_name": "stock_basic",
+            "token": "a11e32e820d49141b0bcff711d6c4d66dda7e69d228ed0ac20d22750",
+            "params": {
+                "list_stauts": "L"
+            },
+            "fields": "ts_code,name,area,industry,list_date"
+        });
+        
+        let spec = TaskSpecification::new(
+            "http://api.tushare.pro",
+            "post",
+            HashMap::new(),
+            Some(&payload)
+        ).unwrap();
+        let mut test_task = SyncTask::default();
+        test_task.set_spec(spec);
+        let _ = test_worker.handle(&mut test_task).await;
+
+        println!("updated task: {:?}", test_task);
+    }
+}

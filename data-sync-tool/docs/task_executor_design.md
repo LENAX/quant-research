@@ -5,7 +5,7 @@
 ### Entities:
 
 - `Worker`: Responsible for executing tasks. Each worker communicates with the `SyncTaskExecutor` by sending the result of each task execution. The worker can handle multiple tasks concurrently. Each worker is capable of executing any task that is given to it, though the tasks are chosen based on a scheduling strategy.
-- `DatasetQueue`: A queue dedicated to storing sync tasks for a particular dataset. It is bound to a `RateLimiter` that helps maintain the limits imposed by the data vendor.
+- `TaskQueue`: A queue dedicated to storing sync tasks for a particular dataset. It is bound to a `RateLimiter` that helps maintain the limits imposed by the data vendor.
 
 ### Value Objects:
 
@@ -19,6 +19,78 @@
 The `SyncTaskExecutor` starts workers, each of which tries to execute tasks by receiving them from the `DatasetQueue`, respecting the rate limit. When the execution is done, the `Worker` sends the result back to the `SyncTaskExecutor`, which then handles the result. It checks for errors, and if any are found, it decides if the task needs to be retried or not based on the remaining retry count of the task.
 
 The entire design is intended to be asynchronous, built around the `async/await` feature of Rust and the async runtime provided by Tokio, making the best use of system resources and providing high throughput.
+
+## Rough Idea of Task Scheduling
+
+Let me propose a new design for SyncTaskExecutor. It should orchestrate data synchronization and gracefully handling errors. 
+
+Before giving you the design, let me describe some cases where tasks could fail.
+
+In our usecases, tasks could fail due to:
+
+* Network error
+* Rate limit exceeded
+* Invalid request
+* User sends a control c signal
+* User cancels the task
+* Other unrecoverable error
+
+Let me describe the requirement and the design of SyncTaskExecutor.
+
+---
+
+
+
+The SyncTaskExecutor has two components: WorkerPool and TaskQueueManager.
+
+* The WorkerPool is a VecDeque of type bounded by trait SyncWorker.
+  * For each worker in the worker pool, it runs a spinning loop while the TaskQueueManager still has unfinished tasks.
+  * A worker will try to get tasks, watch for cancel command, keyboard interrupt, cancel task command, invalid requests error, and request rate exceed error
+    * A worker will try to send a checkpoint command to the broadcast channel when encountered an unrecoverable error or keyboard interrupt.
+  * It will try to query TaskQueueManager to get a task to run. A worker will get an `Option <SyncTask>` . While the task is resolved to None, it will wait until it gets a task. When the worker gets a task, it will try to run it, and if the task is successful, it will send the task to the result channel. Otherwise, it will send it back to the TaskQueueManager until the the number of retries is run out. On each status update, it will create and send a message struct through a tokio::sync::broadcast channel.
+    * The body of this message consists of these variants:
+      * StatusReport:
+        * containing dataset id, task id, status, and message to the status reporting channel (which is a watch channel).
+      * Checkpoint
+        * containing dataset id, a vector of finished task id, a vector of unfinished task id
+        * sent on DailyLimitExceedError,
+* TaskQueueManager holds a hashmap of <DatasetId, TaskQueue>.
+  * It is responsible for managing task queues.
+  * It can get and add tasks.
+  * Each TaskQueue may contain a RateLimiter.
+  * When TaskQueueManager tries to get a task of a TaskQueue, it will try to get a task with round robin style. To ensure fairness, it will remember which task queue was polled and skip it on next query.
+  * When a TaskQueue is asked to return a task, it will check whether it has a RateLimiter.
+    * If it has a RateLimiter, the RateLimiter will return an enum to tell whether the limit is exceeded. If not, a task is allowed to be popped off the queue. Otherwise, the queue will return nothing.
+      * **If the day limit is exceeded**, all remaining tasks in the current queue must be cancelled. This case will lead to a unfinished sync plan. The worker will report this status and let SyncPlan set a checkpoint to where to start on the next sync iteration.
+    * Otherwise it just pops a task of the queue
+    * The TaskQueueManager will deduct the number of remain tasks by 1 in this case
+  * The TaskQueueManager counts the number of tasks left in all queues.
+
+Let me describe the high level design of RateLimiter.
+
+---
+
+
+
+RateLimiter is a trait contains a method called can_proceed. It returns a message enum called RateLimitStatus containing 4 variants: Ok(remaining_count), RequestPerMinuteExceeded, RequestPerDayExceed, CountDownUnfinished(remaining_second)
+
+The RateLimiter will disallow sending task on these conditions:
+
+* Number of requests per day is exceeded.
+* Number of requests per minute is exceeded
+* Freeze countdown not finished
+  * A freeze count down is set to the time provided by an error message from A remote data vendor. The rate limiter uses an ErrorMessageAnalyzer to understand the error message.
+
+For each request send to rate limiter, it will deduct the available request by 1 if the limit is not exceeded. Otherwise, it will start a count down of 60 seconds unless the daily limit is exceeded. If the remote says the daily limit is exceeded, the rate limiter will return RequestPerDayExceed variant of the message enum
+
+Let me describe the high level design of ErrorMessageAnalyzer
+
+---
+
+
+ErrorMessageAnalyzer is a utility service that uses some rules or patterns from the database to parse error messages returned by remote web service. It uses these rules to parse error message string into a enum that covers common web request errors. In our usecase, the data vendor may return errors like RateLimitExceedError, FieldsNotFoundError, InvalidTokenError, MaxDailyRequestReachedError. Other uncaptured error will be converted into GeneralWebRequestError(message). The returned error message will be matched against rules of type regular expressions. In the database, these rules will be stored as strings. The error message may be in English or Chinese.
+
+
 
 ## Updated Design
 

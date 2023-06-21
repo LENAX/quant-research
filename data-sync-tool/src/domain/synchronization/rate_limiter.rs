@@ -1,11 +1,15 @@
-/// Task Executor Trait
-/// Defines the common interface for task execution 
-use std::error::Error;
+/// RateLimiter Trait
+/// Defines the common interface for rate limiters
+use async_trait::async_trait;
 
-use uuid::Uuid;
-use super::{value_objects::sync_config::RateQuota, sync_task::SyncTask};
+pub enum RateLimitStatus {
+    Ok(usize),
+    RequestPerMinuteExceeded,
+    RequestPerDayExceeded,
+    CountdownUnfinished(usize), 
+}
 
+#[async_trait]
 pub trait RateLimiter: Sync + Send {
-    fn apply_limit(&mut self, quota: &RateQuota, sync_plan_id: Uuid) -> bool;
-    fn can_proceed(&mut self, task: &SyncTask) -> Result<bool, Box<dyn Error>>;
+    async fn can_proceed(&mut self) -> RateLimitStatus;
 }

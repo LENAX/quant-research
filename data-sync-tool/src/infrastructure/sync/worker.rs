@@ -203,12 +203,12 @@ mod tests {
         let client = reqwest::Client::new();
         let mut test_worker = WebAPISyncWorker::new(client);
         let payload = json!({
-            "api_name": "stock_basic",
+            "api_name": "news",
             "token": "a11e32e820d49141b0bcff711d6c4d66dda7e69d228ed0ac20d22750",
             "params": {
-                "list_stauts": "L"
+                "start_date":"","end_date":"","src":"","limit":"","offset":""
             },
-            "fields": "ts_code,name,area,industry,list_date"
+            "fields": ["datetime", "content", "title"]
         });
         
         let spec = TaskSpecification::new(

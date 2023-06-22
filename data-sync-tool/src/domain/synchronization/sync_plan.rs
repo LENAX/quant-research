@@ -1,21 +1,21 @@
 // Synchronization Plan Definition
 // Defines when synchronization of a dataset should happend
 
-use std::{str::FromStr, collections::HashMap};
+use std::{collections::HashMap};
 
 use super::{
     custom_errors::TaskCreationError,
     sync_task::SyncTask,
-    value_objects::sync_config::{self, SyncConfig},
-    value_objects::task_spec::{RequestMethod, TaskSpecification},
+    value_objects::sync_config::{SyncConfig},
+    value_objects::task_spec::{RequestMethod},
 };
 use chrono::prelude::*;
 use derivative::Derivative;
-use fake::Fake;
+
 use getset::{Getters, Setters};
-use itertools::izip;
+
 use serde_json::Value;
-use url::{ParseError, Url};
+use url::Url;
 use uuid::Uuid;
 
 #[derive(Derivative)]

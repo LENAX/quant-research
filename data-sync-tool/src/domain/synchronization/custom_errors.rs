@@ -1,5 +1,5 @@
 use std::error::{Error, self};
-use std::fmt;
+use std::fmt::{self, Display, Formatter};
 use url::ParseError;
 use derivative::Derivative;
 
@@ -98,5 +98,34 @@ impl fmt::Display for RequestMethodParsingError {
 impl error::Error for RequestMethodParsingError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         None
+    }
+}
+
+#[derive(Debug)]
+pub enum TimerError {
+    TimeCountFailedError,
+    TimerAlreadyRunningError,
+}
+
+impl fmt::Display for TimerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            TimerError::TimeCountFailedError =>
+                write!(f, "Failed to update time in the timer!"),
+            // The wrapped error contains additional information and is available
+            // via the source() method.
+            // TODO: Provide better error information
+            TimerError::TimerAlreadyRunningError =>
+                write!(f, "The timer is already running!"),
+        }
+    }
+}
+
+impl error::Error for TimerError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match *self {
+            TimerError::TimeCountFailedError => None,
+            TimerError::TimerAlreadyRunningError => None,
+        }
     }
 }

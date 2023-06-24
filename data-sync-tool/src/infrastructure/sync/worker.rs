@@ -84,7 +84,6 @@ pub struct WebAPISyncWorker {
 
 #[async_trait]
 impl SyncWorker for WebAPISyncWorker {
-    // async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<&mut SyncTask, Box<dyn Error>> {
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>> {
         self.state = WorkerState::Working;
         sync_task.start();

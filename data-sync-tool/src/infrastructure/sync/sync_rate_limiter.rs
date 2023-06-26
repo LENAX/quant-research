@@ -100,7 +100,7 @@ impl RateLimiter for WebRequestRateLimiter {
                         }
                     } else {
                         error!("In RateLimiter {}, Failed to update count down!", limiter_id);
-                        return ();
+                        return;
                     }
                 }
             }

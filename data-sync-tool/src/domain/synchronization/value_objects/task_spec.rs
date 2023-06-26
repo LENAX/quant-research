@@ -1,7 +1,7 @@
 //! Task Specification
 //! Contains the necessary data of performing data synchronization
 
-use std::{str::FromStr, error::Error, string::ParseError, collections::HashMap, hash::Hash};
+use std::{str::FromStr, error::Error, string::ParseError, collections::HashMap, hash::Hash, sync::Arc};
 
 use getset::{Getters, Setters};
 use serde_json::Value;
@@ -38,14 +38,14 @@ impl FromStr for RequestMethod {
 
 #[derive(Debug, PartialEq, Eq, Clone, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
-pub struct TaskSpecification<'a> {
+pub struct TaskSpecification {
     request_endpoint: Url,
     request_method: RequestMethod,
-    request_header: HashMap<&'a str, &'a str>,
-    payload: Option<&'a Value>
+    request_header: HashMap<String, String>,
+    payload: Option<Arc<Value>>
 }
 
-impl<'a> Default for TaskSpecification<'a> {
+impl Default for TaskSpecification {
     fn default() -> Self {
         Self {
             request_endpoint: Url::parse("http://localhost/").unwrap(),
@@ -56,8 +56,8 @@ impl<'a> Default for TaskSpecification<'a> {
     }
 }
 
-impl<'a> From<&'a CreateTaskRequest<'a>> for TaskSpecification<'a> {
-    fn from(value: &'a CreateTaskRequest<'a>) -> Self {
+impl From<&CreateTaskRequest> for TaskSpecification {
+    fn from(value: &CreateTaskRequest) -> Self {
         Self { 
             request_endpoint: value.url().clone(), 
             request_method: value.request_method().clone(), 
@@ -67,8 +67,8 @@ impl<'a> From<&'a CreateTaskRequest<'a>> for TaskSpecification<'a> {
     }
 }
 
-impl<'a> TaskSpecification<'a> {
-    pub fn new(url: &'a str, request_method: &'a str, request_header: HashMap<&'a str, &'a str>, payload: Option<&'a Value>) -> Result<Self, Box<dyn Error>>  {
+impl TaskSpecification {
+    pub fn new(url: &str, request_method: &str, request_header: HashMap<String, String>, payload: Option<Arc<Value>>) -> Result<Self, Box<dyn Error>>  {
         let parsed_url = Url::parse(url)?;
         let request_method = RequestMethod::from_str(request_method)?;
 

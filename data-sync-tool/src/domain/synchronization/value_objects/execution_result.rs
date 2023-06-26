@@ -4,11 +4,11 @@ use uuid::Uuid;
 
 #[derive(Debug, PartialEq, Eq, Clone, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
-pub struct ExecutionResult<'a> {
-    sync_plan_id: &'a Uuid,
-    task_id: &'a Uuid,
-    dataset_id: &'a Uuid,
-    datasource_id: &'a Uuid,
+pub struct ExecutionResult {
+    sync_plan_id: Uuid,
+    task_id: Uuid,
+    dataset_id: Uuid,
+    datasource_id: Uuid,
     data: Value,
-    result_message: &'a str,
+    result_message: String,
 }

@@ -24,7 +24,7 @@ pub enum SyncStatus {
 
 #[derive(Derivative, Debug, PartialEq, Eq, Clone, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
-pub struct SyncTask<'a> {
+pub struct SyncTask {
     id: Uuid,
     sync_plan_id: Option<Uuid>,
     datasource_id: Option<Uuid>,
@@ -35,28 +35,28 @@ pub struct SyncTask<'a> {
     start_time: DateTime<Local>,
     end_time: Option<DateTime<Local>>,
     create_time: DateTime<Local>,
-    spec: TaskSpecification<'a>, // data payload and specification of the task
+    spec: TaskSpecification, // data payload and specification of the task
     result: Option<Value>,
     result_message: Option<String>,
 }
 
-impl<'a> From<&'a CreateTaskRequest<'a>> for SyncTask<'a> {
-    fn from(req: &'a CreateTaskRequest<'a>) -> Self {
+impl From<&CreateTaskRequest> for SyncTask {
+    fn from(req: &CreateTaskRequest) -> Self {
         let mut new_task = Self::default();
-        let task_spec: TaskSpecification<'a> = req.into();
+        let task_spec: TaskSpecification = TaskSpecification::from(req);
 
         new_task.set_spec(task_spec);
         return new_task;
     }
 }
 
-impl<'a> SyncTask<'a> {
+impl SyncTask {
     pub fn new(
         dataset_id: Uuid,
         dataset_name: &str,
         datasource_id: Uuid,
         datasource_name: &str,
-        task_spec: TaskSpecification<'a>,
+        task_spec: TaskSpecification,
         sync_plan_id: Uuid,
     ) -> Self {
         let mut new_task = Self::default();

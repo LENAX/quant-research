@@ -148,7 +148,7 @@ pub enum TaskManagerError {
 pub struct TaskManager<T: RateLimiter> {
     queues: HashMap<DatasetId, Arc<Mutex<SyncTaskQueue<T>>>>,
     task_channel: Sender<Arc<Mutex<FakeTask>>>,
-    error_message_channel: Sender<TaskManagerError>,
+    error_message_channel: Sender<TaskManagerError>, // TODO: use a T: MessageQueue member to abstract away the communication details
     failed_task_receiver: Receiver<(DatasetId, Arc<Mutex<FakeTask>>)>,
 }
 
@@ -165,6 +165,9 @@ impl<T: RateLimiter> TaskManager<T> {
 
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         loop {
+            // Check whether all queues are empty
+            // break the loop if all queues are empty
+
             let queues: Vec<Arc<Mutex<SyncTaskQueue<T>>>> = self.queues.values().cloned().collect();
             for queue in queues {
                 let mut q_lock = queue.lock().await;

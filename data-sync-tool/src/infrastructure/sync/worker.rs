@@ -2,7 +2,7 @@
 //! Handles synchronization task and sends web requests to remote data vendors
 //!
 
-use std::{collections::HashMap, error::Error, str::FromStr};
+use std::{collections::HashMap, error::Error, str::FromStr, sync::Arc, borrow::Borrow};
 
 use async_trait::async_trait;
 use derivative::Derivative;
@@ -26,13 +26,13 @@ pub trait SyncWorker: Send + Sync {
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>>;
 }
 
-fn build_headers(header_map: &HashMap<&str, &str>) -> HeaderMap {
+fn build_headers(header_map: &HashMap<String, String>) -> HeaderMap {
     let header: HeaderMap = header_map
         .iter()
         .map(|(name, val)| {
             (
-                HeaderName::from_str(name.to_lowercase().as_ref()),
-                HeaderValue::from_str(val.as_ref()),
+                HeaderName::from_str(name.to_lowercase().as_str()),
+                HeaderValue::from_str(val.as_str()),
             )
         })
         .filter(|(k, v)| k.is_ok() && v.is_ok())
@@ -41,7 +41,13 @@ fn build_headers(header_map: &HashMap<&str, &str>) -> HeaderMap {
     return header;
 }
 
-fn build_request(http_client: &Client, url: &str, request_method: RequestMethod, headers: Option<HeaderMap>, params: Option<&Value>) -> RequestBuilder {
+fn build_request(
+    http_client: &Client,
+    url: &str,
+    request_method: RequestMethod,
+    headers: Option<HeaderMap>,
+    params: Option<Arc<Value>>,
+) -> RequestBuilder {
     match request_method {
         RequestMethod::Get => {
             let mut request = http_client.get(url);
@@ -53,14 +59,15 @@ fn build_request(http_client: &Client, url: &str, request_method: RequestMethod,
                 request = request.headers(headers);
             }
             return request;
-        },
+        }
         RequestMethod::Post => {
             let mut request = http_client.post(url);
             if let Some(headers) = headers {
                 request = request.headers(headers);
             }
             if let Some(params) = params {
-                request = request.json(params);
+                let inner_value: &Value = params.borrow();
+                request = request.json(inner_value);
             }
             return request;
         }
@@ -89,11 +96,11 @@ impl SyncWorker for WebAPISyncWorker {
         sync_task.start();
         let headers = build_headers(sync_task.spec().request_header());
         let request = build_request(
-            &self.http_client, 
+            &self.http_client,
             sync_task.spec().request_endpoint().as_str(),
             sync_task.spec().request_method().to_owned(),
             Some(headers),
-            *sync_task.spec().payload()
+            sync_task.spec().payload().clone(),
         );
         let resp = request.send().await;
 
@@ -126,8 +133,6 @@ impl WebAPISyncWorker {
             http_client,
         };
     }
-
-    
 }
 
 #[cfg(test)]
@@ -139,15 +144,17 @@ mod tests {
             sync_task::SyncTask,
             value_objects::task_spec::{RequestMethod, TaskSpecification},
         },
-        infrastructure::sync::worker::{SyncWorker, WebAPISyncWorker, build_headers, build_request},
+        infrastructure::sync::worker::{
+            build_headers, build_request, SyncWorker, WebAPISyncWorker,
+        },
     };
     use polars::prelude::*;
+    use serde_json::json;
     use serde_json::Value;
     use std::fs::File;
     use std::io::BufReader;
     use std::io::Cursor;
     use url::Url;
-    use serde_json::json;
 
     #[tokio::test]
     async fn it_should_build_and_send_a_post_request() {
@@ -161,11 +168,11 @@ mod tests {
             "fields": "ts_code,name,area,industry,list_date"
         });
         let request = build_request(
-            &client, 
-            "http://api.tushare.pro", 
-            RequestMethod::Post, 
+            &client,
+            "http://api.tushare.pro",
+            RequestMethod::Post,
             None,
-            Some(&payload),
+            Some(Arc::new(payload)),
         );
         let resp = request.send().await;
         match resp {
@@ -186,11 +193,11 @@ mod tests {
 
     #[test]
     fn it_should_build_header_from_hashmap() {
-        let hashmap: HashMap<&str, &str> = [
+        let hashmap: HashMap<String, String> = [
             ("Cookie", "_gh_sess=73%2FX%2F0EoXU1Tj4slthgAt%2B%2BQIdQJekXSbcXBbFfDv0erH%2BHv0oPGtZ7hfDCNpHVtEpFs%2BJcMXgCjK%2BFUG%2BrKS6v6rOAZeZF%2B0bMyia%2BNhr5HmavEbo5y8NbKY0xtXw966S%2FY9ILmNDD%2FZYSUfLX0fIcr1z7Fj5VGeEOeqXLlKtDuH8Y6Cqc%2F1kMpZ3A0uJCTKnKHmi4VmWPDNvkuMDPRNqc6DodQdUOA7w5rEzsqSn2aHjf3C1znSmGss1BNyE1jRreBpGNkjP3PaCJnyNgByOuu%2BHYFhOm3kA%3D%3D--NTzXHWgMFd29sCbV--lLZIz%2FqJxMV%2FxR0JGQEYFg%3D%3D; path=/; secure; HttpOnly; SameSite=Lax"),
             ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")]
             .iter()
-            .map(|(k, v)| (*k, *v))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
 
         let header_map = build_headers(&hashmap);
@@ -209,13 +216,14 @@ mod tests {
             },
             "fields": ["datetime", "content", "title"]
         });
-        
+
         let spec = TaskSpecification::new(
             "http://api.tushare.pro",
             "post",
             HashMap::new(),
-            Some(&payload)
-        ).unwrap();
+            Some(Arc::new(payload)),
+        )
+        .unwrap();
         let mut test_task = SyncTask::default();
         test_task.set_spec(spec);
         let _ = test_worker.handle(&mut test_task).await;

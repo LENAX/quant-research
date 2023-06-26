@@ -1,7 +1,7 @@
 // Synchronization Plan Definition
 // Defines when synchronization of a dataset should happend
 
-use std::{collections::HashMap};
+use std::{collections::HashMap, sync::Arc};
 
 use super::{
     custom_errors::TaskCreationError,
@@ -35,17 +35,17 @@ pub enum SyncFrequency {
 
 #[derive(Derivative, Debug, PartialEq, Eq, Clone, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
-pub struct CreateTaskRequest<'a> {
+pub struct CreateTaskRequest {
     url: Url,
     request_method: RequestMethod,
-    request_header: HashMap<&'a str, &'a str>,
-    payload: Option<&'a Value>,
+    request_header: HashMap<String, String>,
+    payload: Option<Arc<Value>>,
 }
 
 // Synchronization Plan
 #[derive(Derivative, Debug, PartialEq, Eq, Clone, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
-pub struct SyncPlan<'a> {
+pub struct SyncPlan {
     id: Uuid,
     #[derivative(Default(value = "New Plan"))]
     name: String,
@@ -56,7 +56,7 @@ pub struct SyncPlan<'a> {
     #[derivative(Default(value = "false"))]
     active: bool,
     sync_config: SyncConfig,
-    tasks: Vec<SyncTask<'a>>,
+    tasks: Vec<SyncTask>,
     datasource_id: Option<Uuid>,
     datasource_name: Option<String>,
     dataset_id: Option<Uuid>,
@@ -64,21 +64,21 @@ pub struct SyncPlan<'a> {
     param_template_id: Option<Uuid>,
 }
 
-impl<'a> SyncPlan<'a> {
+impl SyncPlan {
     pub fn new(
-        name: &'a str,
-        description: &'a str,
+        name: &str,
+        description: &str,
         trigger_time: Option<DateTime<Local>>,
         frequency: SyncFrequency,
         active: bool,
-        tasks: Vec<SyncTask<'a>>,
+        tasks: Vec<SyncTask>,
         datasource_id: Option<Uuid>,
-        datasource_name: &'a str,
+        datasource_name: &str,
         dataset_id: Option<Uuid>,
-        dataset_name: &'a str,
+        dataset_name: &str,
         param_template_id: Option<Uuid>,
         sync_config: SyncConfig,
-    ) -> SyncPlan<'a> {
+    ) -> SyncPlan {
         SyncPlan {
             id: Uuid::new_v4(),
             name: name.to_string(),
@@ -122,8 +122,8 @@ impl<'a> SyncPlan<'a> {
     }
 
     pub fn create_tasks(
-        &'a mut self,
-        requests: &'a [CreateTaskRequest<'a>],
+        & mut self,
+        requests: & [CreateTaskRequest],
     ) -> Result<&mut Self, TaskCreationError> {
         for request in requests {
             let mut new_task = SyncTask::from(request);

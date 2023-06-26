@@ -3,12 +3,11 @@
 use std::error::Error;
 use async_trait::async_trait;
 
-use super::{sync_task::SyncTask, value_objects::execution_result::ExecutionResult};
+use super::sync_task::SyncTask;
 
 #[async_trait]
 pub trait TaskExecutor {
-    fn assign(&mut self, tasks: &[SyncTask]) -> Result<Box<dyn TaskExecutor>, Box<dyn Error>>;
-    async fn execute_all<'a>(&mut self) -> Result<ExecutionResult<'a>, Box<dyn Error>>;
-    async fn execute<'a>(self, task: &mut SyncTask) -> Result<ExecutionResult<'a>, Box<dyn Error>>;
-    async fn cancel<'a>(self, task: &mut SyncTask) -> Result<&'a mut SyncTask<'a>, Box<dyn Error>>;
+    async fn assign(&mut self, tasks: &[SyncTask]);
+    async fn run(&mut self) -> Result<(), Box<dyn Error>>;
+    async fn cancel(&mut self) -> Result<(), Box<dyn Error>>;
 }

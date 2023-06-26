@@ -15,34 +15,34 @@ use log::error;
 use tokio::{sync::{Mutex, mpsc::{Sender, Receiver}}, task::JoinHandle, join};
 use uuid::Uuid;
 
-use crate::domain::synchronization::{
+use crate::{domain::synchronization::{
     custom_errors::TimerError,
     rate_limiter::{RateLimitStatus, RateLimiter},
     // sync_task::SyncTask,
-};
+}, infrastructure::mq::message_bus::MessageBus};
 
 type DatasetId = Uuid;
 type CooldownTimerTask = JoinHandle<()>;
 type TimeSecondLeft = i64;
 
 pub enum SyncTaskQueueValue {
-    Task(Option<Arc<Mutex<FakeTask>>>),
+    Task(Option<Arc<Mutex<SyncTask>>>),
     RateLimited(Option<CooldownTimerTask>, TimeSecondLeft), // timer task, seco
     DailyLimitExceeded,
 }
 
-pub struct FakeTask {}
+pub struct SyncTask {}
 
 #[derive(Derivative, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncTaskQueue<T: RateLimiter> {
-    tasks: Mutex<VecDeque<Arc<Mutex<FakeTask>>>>,
+    tasks: Mutex<VecDeque<Arc<Mutex<SyncTask>>>>,
     rate_limiter: Option<T>,
 }
 
 impl<T: RateLimiter> SyncTaskQueue<T> {
     pub fn new(
-        tasks: Vec<Arc<Mutex<FakeTask>>>,
+        tasks: Vec<Arc<Mutex<SyncTask>>>,
         rate_limiter: Option<T>,
     ) -> SyncTaskQueue<T> {
         let task_queue = Mutex::new(VecDeque::from(tasks));
@@ -109,7 +109,7 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
     pub async fn drain<R: RangeBounds<usize>>(
         &mut self,
         range: R,
-    ) -> Vec<Arc<Mutex<FakeTask>>> {
+    ) -> Vec<Arc<Mutex<SyncTask>>> {
         //! Pops all elements in the queue given the range
         //! Typically used when the remote reports a daily limited reached error
         let mut q_lock = self.tasks.lock().await;
@@ -117,13 +117,13 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
         return values.collect::<Vec<_>>();
     }
 
-    pub async fn push_back(&mut self, task: Arc<Mutex<FakeTask>>) {
+    pub async fn push_back(&mut self, task: Arc<Mutex<SyncTask>>) {
         let mut q_lock = self.tasks.lock().await;
         q_lock.push_back(task);
         return ();
     }
 
-    pub async fn push_front(&mut self, task: Arc<Mutex<FakeTask>>) {
+    pub async fn push_front(&mut self, task: Arc<Mutex<SyncTask>>) {
         let mut q_lock = self.tasks.lock().await;
         q_lock.push_front(task);
         return ();
@@ -147,20 +147,20 @@ pub enum TaskManagerError {
 #[getset(get = "pub", set = "pub")]
 pub struct TaskManager<T: RateLimiter> {
     queues: HashMap<DatasetId, Arc<Mutex<SyncTaskQueue<T>>>>,
-    task_channel: Sender<Arc<Mutex<FakeTask>>>,
-    error_message_channel: Sender<TaskManagerError>, // TODO: use a T: MessageQueue member to abstract away the communication details
-    failed_task_receiver: Receiver<(DatasetId, Arc<Mutex<FakeTask>>)>,
+    task_channel: Arc<Mutex<dyn MessageBus<Arc<Mutex<SyncTask>>>>>,
+    error_message_channel:Arc<Mutex<dyn MessageBus<TaskManagerError>>>, // TODO: use a T: MessageQueue member to abstract away the communication details
+    failed_task_channel: Arc<Mutex<dyn MessageBus<(DatasetId, Arc<Mutex<SyncTask>>)>>>,
 }
 
 impl<T: RateLimiter> TaskManager<T> {
     pub fn new(
         task_queues: Vec<(DatasetId, Arc<Mutex<SyncTaskQueue<T>>>)>,
-        task_channel: Sender<Arc<Mutex<FakeTask>>>,
-        error_message_channel: Sender<TaskManagerError>,
-        failed_task_receiver: Receiver<(DatasetId, Arc<Mutex<FakeTask>>)>,
+        task_channel: Arc<Mutex<dyn MessageBus<Arc<Mutex<SyncTask>>>>>,
+        error_message_channel: Arc<Mutex<dyn MessageBus<TaskManagerError>>>,
+        failed_task_channel: Arc<Mutex<dyn MessageBus<(DatasetId, Arc<Mutex<SyncTask>>)>>>,
     ) -> TaskManager<T> {
         let queues = task_queues.into_iter().collect::<HashMap<_, _>>();
-        Self { queues, task_channel, error_message_channel, failed_task_receiver }
+        Self { queues, task_channel, error_message_channel, failed_task_channel }
     }
 
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {

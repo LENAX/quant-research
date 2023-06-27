@@ -23,12 +23,12 @@ impl<T: Debug + Send + Sync + 'static> TokioMpscMessageBus<T> {
 impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> {
     /// TODO: Error Handling
     /// TODO: Graceful shutdown
-    async fn send(&self, message: T) -> Result<(), Box<dyn Error>> {
+    async fn send(&self, message: T) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.sender.send(message).await?;
         Ok(())
     }
 
-    async fn receive(&mut self) -> Result<Option<T>, Box<dyn Error>> {
+    async fn receive(&mut self) -> Result<Option<T>, Box<dyn Error + Send + Sync>> {
         let received_value = self.receiver.recv().await.ok_or("Failed to receive message")?;
         Ok(Some(received_value))
     }

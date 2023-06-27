@@ -145,22 +145,26 @@ pub enum TaskManagerError {
 /// TaskManager
 #[derive(Derivative, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
-pub struct TaskManager<
+pub struct TaskManager<T, MT, ME, MF>
+where
     T: RateLimiter, 
     MT: MessageBus<Arc<Mutex<SyncTask>>>,
     ME: MessageBus<TaskManagerError>,
     MF: MessageBus<(DatasetId, Arc<Mutex<SyncTask>>)>
-> {
+{
     queues: HashMap<DatasetId, Arc<Mutex<SyncTaskQueue<T>>>>,
     task_channel: Arc<Mutex<MT>>,
     error_message_channel:Arc<Mutex<ME>>, // TODO: use a T: MessageQueue member to abstract away the communication details
     failed_task_channel: Arc<Mutex<MF>>,
 }
 
-impl<T: RateLimiter, 
-     MT: MessageBus<Arc<Mutex<SyncTask>>>,
-     ME: MessageBus<TaskManagerError>,
-     MF: MessageBus<(DatasetId, Arc<Mutex<SyncTask>>)>> TaskManager<T, MT, ME, MF> {
+impl<T, MT, ME, MF> TaskManager<T, MT, ME, MF>
+where
+    T: RateLimiter, 
+    MT: MessageBus<Arc<Mutex<SyncTask>>>,
+    ME: MessageBus<TaskManagerError>,
+    MF: MessageBus<(DatasetId, Arc<Mutex<SyncTask>>)> 
+{
     pub fn new(
         task_queues: Vec<(DatasetId, Arc<Mutex<SyncTaskQueue<T>>>)>,
         task_channel: Arc<Mutex<MT>>,

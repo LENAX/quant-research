@@ -6,4 +6,5 @@ use std::error::Error;
 pub trait MessageBus<T: Send + Sync + 'static> {
     async fn send(&self, message: T) -> Result<(), Box<dyn Error>>;
     async fn receive(&mut self) -> Result<Option<T>, Box<dyn Error>>;
+    async fn close(&self);
 }

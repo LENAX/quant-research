@@ -175,16 +175,44 @@ where
         Self { queues, task_channel, error_message_channel, failed_task_channel }
     }
 
+    pub async fn all_queues_are_empty(&self) -> bool {
+        let queues: Vec<_> = self.queues.values().cloned().collect();
+        let all_queues_empty = join_all(queues.into_iter().map(|queue| async move {
+            let queue = queue.lock().await;
+            queue.is_empty().await 
+        })).await;
+        let result = all_queues_empty.into_iter().all(|r| r);
+
+        return result;
+    }
+
     pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         loop {
             // Check whether all queues are empty
             // break the loop if all queues are empty
+            if self.all_queues_are_empty().await {
+                println!("All task queues are empty. Exit.");
+                break
+            }
 
-            let queues: Vec<Arc<Mutex<SyncTaskQueue<T>>>> = self.queues.values().cloned().collect();
-            for queue in queues {
-                let mut q_lock = queue.lock().await;
-                let task_value = q_lock.pop_front().await;
+            // let queues: Vec<Arc<Mutex<SyncTaskQueue<T>>>> = self.queues.values().cloned().collect();
+            for (dataset_id, task_queue) in &mut self.queues {
+                let mut q_lock = task_queue.lock().await;
+                let task_value = q_lock.pop_front().await?;
                 // Do something with task_value
+                match task_value {
+                    SyncTaskQueueValue::Task(t) => {
+                        if let Some(t) = t {
+                            // Send the task to its consumer
+                            let task_channel_lock = self.task_channel.lock().await;
+                            task_channel_lock.send(t).await?;
+                        } else {
+                            println!("Received no task from queue {}!", dataset_id);
+                        }
+                    },
+                    SyncTaskQueueValue::RateLimited(_, _) => todo!(),
+                    SyncTaskQueueValue::DailyLimitExceeded => todo!(),
+                }
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }

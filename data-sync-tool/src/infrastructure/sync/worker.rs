@@ -138,6 +138,16 @@ impl WebAPISyncWorker {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use log::{info, trace, warn, error};
+    use rbatis::error;
+    
+    use std::env;
+    use env_logger;
+    use std::io::Write;
+    use env_logger::Builder;
+    use log::LevelFilter;
+
+    use chrono::Local;
 
     use crate::{
         domain::synchronization::{
@@ -148,13 +158,29 @@ mod tests {
             build_headers, build_request, SyncWorker, WebAPISyncWorker,
         },
     };
-    use polars::prelude::*;
     use serde_json::json;
     use serde_json::Value;
     use std::fs::File;
     use std::io::BufReader;
     use std::io::Cursor;
     use url::Url;
+    use std::sync::Arc;
+
+    fn init_logger() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    #[test]
+    fn logging_should_work() {
+        init_logger();
+
+        log::warn!("warn");
+        log::info!("info");
+        log::debug!("debug");
+        info!("Print an info!");
+        warn!("This is a warning!");
+        error!("Error!");
+    }
 
     #[tokio::test]
     async fn it_should_build_and_send_a_post_request() {

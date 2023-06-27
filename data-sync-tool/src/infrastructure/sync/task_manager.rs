@@ -294,6 +294,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_tasks() {
         // Arrange
+        // TODO: reduce the layers of Arc<Mutex<T>>
         let test_rate_limiter = WebRequestRateLimiter::new(30, None, Some(3)).unwrap();
         let task_queue: Arc<Mutex<HashMap<DatasetId, (Arc<Mutex<SyncTaskQueue<WebRequestRateLimiter>>>, MaxRetry)>>> = Arc::new(Mutex::new(HashMap::new()));
         let task_manager = Arc::new(Mutex::new(TaskManager::new(task_queue)));

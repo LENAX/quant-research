@@ -26,3 +26,5 @@ Cargo.lock
 
 # custom 
 settings.json
+*/.vs/*.**
+data-sync-tool/.vs/**

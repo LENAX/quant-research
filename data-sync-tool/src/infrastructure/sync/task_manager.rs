@@ -13,7 +13,7 @@ use derivative::Derivative;
 use futures::future::join_all;
 use getset::{Getters, Setters};
 
-use tokio::{join, sync::Mutex, task::JoinHandle};
+use tokio::{join, sync::{Mutex, RwLock}, task::JoinHandle};
 use uuid::Uuid;
 
 use crate::{
@@ -30,7 +30,7 @@ type CooldownTimerTask = JoinHandle<()>;
 type TimeSecondLeft = i64;
 
 pub enum SyncTaskQueueValue {
-    Task(Option<Arc<Mutex<SyncTask>>>),
+    Task(Option<SyncTask>),
     RateLimited(Option<CooldownTimerTask>, TimeSecondLeft), // timer task, seco
     DailyLimitExceeded,
 }
@@ -38,12 +38,12 @@ pub enum SyncTaskQueueValue {
 #[derive(Derivative, Getters, Setters, Debug)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncTaskQueue<T: RateLimiter> {
-    tasks: Mutex<VecDeque<Arc<Mutex<SyncTask>>>>,
+    tasks: Mutex<VecDeque<SyncTask>>,
     rate_limiter: Option<T>,
 }
 
 impl<T: RateLimiter> SyncTaskQueue<T> {
-    pub fn new(tasks: Vec<Arc<Mutex<SyncTask>>>, rate_limiter: Option<T>) -> SyncTaskQueue<T> {
+    pub fn new(tasks: Vec<SyncTask>, rate_limiter: Option<T>) -> SyncTaskQueue<T> {
         let task_queue = Mutex::new(VecDeque::from(tasks));
         if let Some(rate_limiter) = rate_limiter {
             SyncTaskQueue {
@@ -73,7 +73,7 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
                         );
                         let value = q_lock.pop_front();
                         if let Some(value) = value {
-                            return Ok(SyncTaskQueueValue::Task(Some(value.clone())));
+                            return Ok(SyncTaskQueueValue::Task(Some(value)));
                         } else {
                             return Ok(SyncTaskQueueValue::Task(None));
                         }
@@ -108,7 +108,7 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
         }
     }
 
-    pub async fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Vec<Arc<Mutex<SyncTask>>> {
+    pub async fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Vec<SyncTask> {
         //! Pops all elements in the queue given the range
         //! Typically used when the remote reports a daily limited reached error
         let mut q_lock = self.tasks.lock().await;
@@ -116,19 +116,19 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
         return values.collect::<Vec<_>>();
     }
 
-    pub async fn push_back(&mut self, task: Arc<Mutex<SyncTask>>) {
+    pub async fn push_back(&mut self, task: SyncTask) {
         let mut q_lock = self.tasks.lock().await;
         q_lock.push_back(task);
         return ();
     }
 
-    pub async fn push_front(&mut self, task: Arc<Mutex<SyncTask>>) {
+    pub async fn push_front(&mut self, task: SyncTask) {
         let mut q_lock = self.tasks.lock().await;
         q_lock.push_front(task);
         return ();
     }
 
-    pub async fn front(&self) -> Option<Arc<Mutex<SyncTask>>> {
+    pub async fn front(&self) -> Option<SyncTask> {
         let q_lock = self.tasks.lock().await;
         q_lock.front().cloned()
     }
@@ -158,31 +158,31 @@ type MaxRetry = u32;
 pub struct TaskManager<T, MT, ME, MF>
 where
     T: RateLimiter,
-    MT: MessageBus<Arc<Mutex<SyncTask>>>,
+    MT: MessageBus<SyncTask>,
     ME: MessageBus<TaskManagerError>,
-    MF: MessageBus<(DatasetId, Arc<Mutex<SyncTask>>)> + std::marker::Send,
+    MF: MessageBus<(DatasetId, SyncTask)> + std::marker::Send,
 {
-    queues: Arc<Mutex<HashMap<DatasetId, (Arc<Mutex<SyncTaskQueue<T>>>, MaxRetry)>>>,
-    task_channel: Arc<Mutex<MT>>,
-    error_message_channel: Arc<Mutex<ME>>,
-    failed_task_channel: Arc<Mutex<MF>>,
+    queues: Arc<Mutex<HashMap<DatasetId, (SyncTaskQueue<T>, MaxRetry)>>>,
+    task_channel: Arc<RwLock<MT>>,
+    error_message_channel: Arc<RwLock<ME>>,
+    failed_task_channel: Arc<RwLock<MF>>,
 }
 
 impl<T, MT, ME, MF> TaskManager<T, MT, ME, MF>
 where
     T: RateLimiter + 'static,
-    MT: MessageBus<Arc<Mutex<SyncTask>>>,
+    MT: MessageBus<SyncTask>,
     ME: MessageBus<TaskManagerError>,
-    MF: MessageBus<(DatasetId, Arc<Mutex<SyncTask>>)> + std::marker::Send + 'static,
+    MF: MessageBus<(DatasetId, SyncTask)> + std::marker::Send + 'static + std::marker::Sync,
 {
     pub fn new(
-        task_queues: Arc<Mutex<HashMap<DatasetId, (Arc<Mutex<SyncTaskQueue<T>>>, MaxRetry)>>>,
-        task_channel: Arc<Mutex<MT>>,
-        error_message_channel: Arc<Mutex<ME>>,
-        failed_task_channel: Arc<Mutex<MF>>,
+        task_queues: HashMap<DatasetId, (SyncTaskQueue<T>, MaxRetry)>,
+        task_channel: Arc<RwLock<MT>>,
+        error_message_channel: Arc<RwLock<ME>>,
+        failed_task_channel: Arc<RwLock<MF>>,
     ) -> TaskManager<T, MT, ME, MF> {
         Self {
-            queues: task_queues,
+            queues: Arc::new(Mutex::new(task_queues)),
             task_channel,
             error_message_channel,
             failed_task_channel,
@@ -191,7 +191,7 @@ where
 
     pub async fn add_queue(&mut self, dataset_id: DatasetId, task_queue: SyncTaskQueue<T>, max_retry: MaxRetry) {
         let mut qs_lock = self.queues.lock().await;
-        qs_lock.insert(dataset_id, (Arc::new(Mutex::new(task_queue)), max_retry));
+        qs_lock.insert(dataset_id, (task_queue, max_retry));
     }
 
     pub async fn add_tasks(&mut self, tasks: Vec<SyncTask>) {
@@ -202,8 +202,8 @@ where
             if let Some(dataset_id) = dataset_id {
                 let task_queue = q_lock.get_mut(dataset_id);
                 if let Some((task_queue, _)) = task_queue {
-                    let mut task_queue_lock = task_queue.lock().await;
-                    task_queue_lock.push_back(Arc::new(Mutex::new(task))).await;
+                    // let mut task_queue_lock = task_queue.lock().await;
+                    task_queue.push_back(task).await;
                 }
             }
         }
@@ -211,21 +211,20 @@ where
 
     /// Check whether all queues are empty. If so, the
     pub async fn all_queues_are_empty(&self) -> bool {
-        let queues: Vec<_> = self.queues.lock().await.values().cloned().collect();
-        let all_queues_empty = join_all(queues.into_iter().map(|queue| async move {
-            let queue = queue.0.lock().await;
-            queue.is_empty().await
-        }))
-        .await;
-        let result = all_queues_empty.into_iter().all(|r| r);
+        let queues = self.queues.lock().await;
+        for (q, _) in queues.values() {
+            if !q.is_empty().await {
+                return false;
+            }
+        }
 
-        return result;
+        return true;
     }
 
     pub async fn stop(&self) -> Result<(), Box<dyn Error>> {
-        let task_channel_lock = self.task_channel.lock().await;
-        let error_message_channel_lock = self.error_message_channel.lock().await;
-        let failed_task_channel = self.failed_task_channel.lock().await;
+        let task_channel_lock = self.task_channel.read().await;
+        let error_message_channel_lock = self.error_message_channel.read().await;
+        let failed_task_channel = self.failed_task_channel.read().await;
 
         let _ = join!(
             task_channel_lock.close(),
@@ -243,12 +242,11 @@ where
         let failed_task_channel = Arc::clone(&self.failed_task_channel);
         let handle_failures = tokio::spawn(async move {
             while let Ok(Some((dataset_id, failed_task))) =
-                failed_task_channel.lock().await.receive().await
+                failed_task_channel.write().await.receive().await
             {
                 if let Some((queue, retries_left)) = queues.lock().await.get_mut(&dataset_id) {
-                    let mut queue_lock = queue.lock().await;
                     if *retries_left > 0 {
-                        queue_lock.push_back(failed_task).await;
+                        queue.push_back(failed_task).await;
                         *retries_left -= 1;
                     }
                 }
@@ -267,15 +265,15 @@ where
             }
 
             let mut any_task_found = false;
-            for (dataset_id, task_queue) in &mut self.queues.lock().await.iter_mut() {
-                let mut q_lock = task_queue.0.lock().await;
-                let task_value = q_lock.pop_front().await?;
+            for (dataset_id, (task_queue, _)) in &mut self.queues.lock().await.iter_mut() {
+                // let mut q_lock = task_queue.lock().await;
+                let task_value = task_queue.pop_front().await?;
                 // pull tasks from queues and send it to consumers
                 match task_value {
                     SyncTaskQueueValue::Task(t) => {
                         if let Some(t) = t {
                             // Send the task to its consumer
-                            let task_channel_lock = self.task_channel.lock().await;
+                            let task_channel_lock = self.task_channel.read().await;
                             let _ = task_channel_lock.send(t).await;
                             any_task_found = true;
                         } else {
@@ -283,7 +281,7 @@ where
                         }
                     }
                     SyncTaskQueueValue::RateLimited(cooldown_task, time_left) => {
-                        let error_message_channel_lock = self.error_message_channel.lock().await;
+                        let error_message_channel_lock = self.error_message_channel.read().await;
                         let _ = error_message_channel_lock
                             .send(TaskManagerError::RateLimited(cooldown_task, time_left))
                             .await;
@@ -291,7 +289,7 @@ where
                     SyncTaskQueueValue::DailyLimitExceeded => {
                         // tell task manager's consumers that daily limit is triggered
                         // TODO: figure out what to do with it? Does task manager just tell others this error or do something further?
-                        let error_message_channel_lock = self.error_message_channel.lock().await;
+                        let error_message_channel_lock = self.error_message_channel.read().await;
                         let _ = error_message_channel_lock
                             .send(TaskManagerError::DailyLimitExceeded)
                             .await;
@@ -396,13 +394,13 @@ mod tests {
         let mut task_queue_lock = task_queue.lock().await;
         
         for t in tasks {
-            task_queue_lock.push_back(Arc::new(Mutex::new(t))).await;
+            task_queue_lock.push_back(t).await;
             println!("task queue size: {}", task_queue_lock.len().await);
         }
 
         if let Some(t1) = task_queue_lock.front().await {
-            let t_lock = t1.lock().await;
-            assert_eq!(t_lock.id(), first_task.id(), "Task id not equal!")
+            // let t_lock = t1.lock().await;
+            assert_eq!(t1.id(), first_task.id(), "Task id not equal!")
         }
         // task_queue_lock.p
 

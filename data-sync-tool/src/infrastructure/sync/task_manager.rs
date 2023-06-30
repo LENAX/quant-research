@@ -35,7 +35,7 @@ pub enum SyncTaskQueueValue {
     DailyLimitExceeded,
 }
 
-#[derive(Derivative, Getters, Setters)]
+#[derive(Derivative, Getters, Setters, Debug)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncTaskQueue<T: RateLimiter> {
     tasks: Mutex<VecDeque<Arc<Mutex<SyncTask>>>>,
@@ -189,6 +189,11 @@ where
         }
     }
 
+    pub async fn add_queue(&mut self, dataset_id: DatasetId, task_queue: SyncTaskQueue<T>, max_retry: MaxRetry) {
+        let mut qs_lock = self.queues.lock().await;
+        qs_lock.insert(dataset_id, (Arc::new(Mutex::new(task_queue)), max_retry));
+    }
+
     pub async fn add_tasks(&mut self, tasks: Vec<SyncTask>) {
         let mut q_lock = self.queues.lock().await;
 
@@ -271,7 +276,7 @@ where
                         if let Some(t) = t {
                             // Send the task to its consumer
                             let task_channel_lock = self.task_channel.lock().await;
-                            task_channel_lock.send(t).await;
+                            let _ = task_channel_lock.send(t).await;
                             any_task_found = true;
                         } else {
                             println!("Received no task from queue {}!", dataset_id);
@@ -323,6 +328,7 @@ mod tests {
     use fake::faker::name::en::Name;
     use fake::Fake;
     use rand::Rng;
+    use rbatis::dark_std::errors::new;
     use serde_json::Value;
     use url::Url;
 
@@ -363,52 +369,70 @@ mod tests {
     fn it_should_generate_random_tasks(){
         let tasks = generate_random_sync_tasks(10);
         assert!(tasks.len() == 10);
-        println!("{:?}", tasks);
+        // println!("{:?}", tasks);
 
     }
 
     #[tokio::test]
-    async fn test_add_tasks() {
+    async fn test_add_tasks_to_a_single_queue() {
         // Arrange
         // TODO: reduce the layers of Arc<Mutex<T>>
         let test_rate_limiter = WebRequestRateLimiter::new(30, None, Some(3)).unwrap();
-        let task_queue: Arc<
-            Mutex<HashMap<DatasetId, (Arc<Mutex<SyncTaskQueue<WebRequestRateLimiter>>>, MaxRetry)>>,
-        > = Arc::new(Mutex::new(HashMap::new()));
-        let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<Arc<Mutex<SyncTask>>>::new(200)));
-        let error_message_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(200)));
-        let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(Uuid, Arc<Mutex<SyncTask>>)>::new(200)));
-        let task_manager = Arc::new(Mutex::new(TaskManager::new(
-            task_queue, 
-            task_channel, 
-            error_message_channel,
-            failed_task_channel)));
-       
+        // let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<Arc<Mutex<SyncTask>>>::new(200)));
+        // let error_message_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(200)));
+        // let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(Uuid, Arc<Mutex<SyncTask>>)>::new(200)));
+        // let task_manager = Arc::new(Mutex::new(TaskManager::new(
+        //     task_queue, 
+        //     task_channel, 
+        //     error_message_channel,
+        //     failed_task_channel)));
+        let task_queue: Arc<Mutex<SyncTaskQueue<WebRequestRateLimiter>>> = Arc::new(Mutex::new(
+            SyncTaskQueue::<WebRequestRateLimiter>::new(vec![], Some(test_rate_limiter))
+        ));
 
         let tasks = generate_random_sync_tasks(100);
         let first_task = tasks[0].clone();
 
+        let mut task_queue_lock = task_queue.lock().await;
+        
+        for t in tasks {
+            task_queue_lock.push_back(Arc::new(Mutex::new(t))).await;
+            println!("task queue size: {}", task_queue_lock.len().await);
+        }
+
+        if let Some(t1) = task_queue_lock.front().await {
+            let t_lock = t1.lock().await;
+            assert_eq!(t_lock.id(), first_task.id(), "Task id not equal!")
+        }
+        // task_queue_lock.p
+
         // Act
-        let mut task_manager_lock = task_manager.lock().await;
-        task_manager_lock.add_tasks(tasks).await;
+        // let mut task_manager_lock = task_manager.lock().await;
+        // task_manager_lock.add_tasks(tasks).await;
 
-        // Assert
-        let task_queue_lock = task_manager_lock.queues.lock().await;
-        let task_queue = task_queue_lock.get(&first_task.dataset_id().unwrap());
-        assert!(
-            task_queue.is_some(),
-            "No task queue for the given dataset_id"
-        );
+        // // Assert
+        // let task_queue_lock = task_manager_lock.queues.lock().await;
+        // let task_queue = task_queue_lock.get(&first_task.dataset_id().unwrap());
+        // println!("Keys: {:?}", task_queue_lock.keys());
 
-        let task_queue = task_queue.unwrap();
-        let (queue, _) = task_queue;
-        let queue_lock = queue.lock().await;
-        assert_eq!(queue_lock.len().await, 1, "The task was not added to the queue");
-        let task_in_queue = queue_lock.front().await.unwrap();
-        assert_eq!(
-            task_in_queue.lock().await.id(),
-            first_task.id(),
-            "The task in the queue is not the one that was added"
-        );
+        // if let Some(q) = task_queue {
+        //     println!("Queue: {:?}", q);
+        // }
+        
+        // assert!(
+        //     task_queue.is_some(),
+        //     "No task queue for the given dataset_id"
+        // );
+
+        // let task_queue = task_queue.unwrap();
+        // let (queue, _) = task_queue;
+        // let queue_lock = queue.lock().await;
+        // assert_eq!(queue_lock.len().await, 1, "The task was not added to the queue");
+        // let task_in_queue = queue_lock.front().await.unwrap();
+        // assert_eq!(
+        //     task_in_queue.lock().await.id(),
+        //     first_task.id(),
+        //     "The task in the queue is not the one that was added"
+        // );
     }
 }

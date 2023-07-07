@@ -153,7 +153,7 @@ pub enum TaskManagerError {
 type MaxRetry = u32;
 
 /// TaskManager
-#[derive(Derivative, Getters, Setters)]
+#[derive(Derivative, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
 pub struct TaskManager<T, MT, ME, MF>
 where
@@ -313,13 +313,14 @@ where
 mod tests {
     use crate::{
         domain::synchronization::value_objects::task_spec::{TaskSpecification, RequestMethod},
+        domain::synchronization::rate_limiter::{RateLimitStatus, RateLimiter},
         infrastructure::{
             sync::sync_rate_limiter::WebRequestRateLimiter,
             mq::tokio_channel_mq::TokioMpscMessageBus},
     };
 
     use super::*;
-    use std::sync::Arc;
+    use std::{sync::Arc, hash::Hash};
 
     use chrono::Local;
     use fake::faker::internet::en::SafeEmail;
@@ -363,27 +364,50 @@ mod tests {
         }).collect()
     }
 
+    pub fn new_web_request_limiter(max_request: i64, max_daily_request: Option<i64>, cooldown: Option<i64>) -> WebRequestRateLimiter{
+        return WebRequestRateLimiter::new(max_request, max_daily_request, cooldown).unwrap();
+    }
+
+    pub fn new_empty_queue<T: RateLimiter>(rate_limiter: T) -> SyncTaskQueue<T> {
+        return  SyncTaskQueue::<T>::new(vec![], Some(rate_limiter));
+    }
+
+    pub async fn new_queue_with_random_amount_of_tasks<T: RateLimiter>(rate_limiter: T, min_tasks: u32, max_tasks: u32) -> SyncTaskQueue<T> {
+        let mut rng = rand::thread_rng();
+        let mut new_queue = new_empty_queue(rate_limiter);
+        let n_task = rng.gen_range(min_tasks..max_tasks);
+        let random_tasks = generate_random_sync_tasks(n_task);
+        // let mut q_lock = new_queue.lock().await;
+        for t in random_tasks {
+            new_queue.push_back(t).await;
+        }
+        // drop(q_lock);
+        return new_queue;
+    }
+
+    pub async fn generate_queues_with_web_request_limiter(n: u32) -> Vec<SyncTaskQueue<WebRequestRateLimiter>> {
+        let queues = join_all((0..n).map(|_| async {
+            let mut rng = rand::thread_rng();
+            let max_request: i64 = rng.gen();
+            let cooldown: i64 = rng.gen();
+            let limiter = new_web_request_limiter(max_request, None, Some(cooldown));
+            let q = new_queue_with_random_amount_of_tasks(limiter, 1, 500).await;
+            return q;
+        })).await;
+        return queues;
+    }
+
     #[test]
     fn it_should_generate_random_tasks(){
         let tasks = generate_random_sync_tasks(10);
         assert!(tasks.len() == 10);
         // println!("{:?}", tasks);
-
     }
 
     #[tokio::test]
     async fn test_add_tasks_to_a_single_queue() {
         // Arrange
-        // TODO: reduce the layers of Arc<Mutex<T>>
         let test_rate_limiter = WebRequestRateLimiter::new(30, None, Some(3)).unwrap();
-        // let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<Arc<Mutex<SyncTask>>>::new(200)));
-        // let error_message_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(200)));
-        // let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(Uuid, Arc<Mutex<SyncTask>>)>::new(200)));
-        // let task_manager = Arc::new(Mutex::new(TaskManager::new(
-        //     task_queue, 
-        //     task_channel, 
-        //     error_message_channel,
-        //     failed_task_channel)));
         let task_queue: Arc<Mutex<SyncTaskQueue<WebRequestRateLimiter>>> = Arc::new(Mutex::new(
             SyncTaskQueue::<WebRequestRateLimiter>::new(vec![], Some(test_rate_limiter))
         ));
@@ -402,35 +426,27 @@ mod tests {
             // let t_lock = t1.lock().await;
             assert_eq!(t1.id(), first_task.id(), "Task id not equal!")
         }
-        // task_queue_lock.p
+    }
 
-        // Act
-        // let mut task_manager_lock = task_manager.lock().await;
-        // task_manager_lock.add_tasks(tasks).await;
+    #[tokio::test]
+    async fn test_add_many_queues_to_manager() {
+        let mut manager_queue_map: HashMap<Uuid, (SyncTaskQueue<WebRequestRateLimiter>, u32)> = HashMap::new();
+        generate_queues_with_web_request_limiter(100).await
+            .into_iter()
+            .for_each(|q| {
+                manager_queue_map.insert(uuid::Uuid::new_v4(), (q, 10 as u32));
+                return ;
+            });
+        let task_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncTask>::new(500)));
+        let failed_task_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(500)));
+        let error_msg_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<TaskManagerError>::new(500)));
 
-        // // Assert
-        // let task_queue_lock = task_manager_lock.queues.lock().await;
-        // let task_queue = task_queue_lock.get(&first_task.dataset_id().unwrap());
-        // println!("Keys: {:?}", task_queue_lock.keys());
+        let task_manager = TaskManager::new(
+            manager_queue_map, task_channel, error_msg_channel, failed_task_channel);
+    }
 
-        // if let Some(q) = task_queue {
-        //     println!("Queue: {:?}", q);
-        // }
-        
-        // assert!(
-        //     task_queue.is_some(),
-        //     "No task queue for the given dataset_id"
-        // );
+    #[tokio::test]
+    async fn test_producing_and_consuming_tasks() {
 
-        // let task_queue = task_queue.unwrap();
-        // let (queue, _) = task_queue;
-        // let queue_lock = queue.lock().await;
-        // assert_eq!(queue_lock.len().await, 1, "The task was not added to the queue");
-        // let task_in_queue = queue_lock.front().await.unwrap();
-        // assert_eq!(
-        //     task_in_queue.lock().await.id(),
-        //     first_task.id(),
-        //     "The task in the queue is not the one that was added"
-        // );
     }
 }

@@ -16,7 +16,8 @@ use crate::domain::synchronization::{custom_errors::RequestMethodParsingError, s
 pub enum RequestMethod {
     #[derivative(Default)]
     Get,
-    Post
+    Post,
+    Websocket
 }
 
 impl FromStr for RequestMethod {
@@ -30,6 +31,9 @@ impl FromStr for RequestMethod {
             "Post" => Ok(RequestMethod::Post),
             "post" => Ok(RequestMethod::Post),
             "POST" => Ok(RequestMethod::Post),
+            "Websocket" => Ok(RequestMethod::Websocket),
+            "websocket" => Ok(RequestMethod::Websocket),
+            "ws" => Ok(RequestMethod::Websocket),
             _ => Err(RequestMethodParsingError),
         }
     }

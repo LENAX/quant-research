@@ -71,6 +71,12 @@ fn build_request(
             }
             return request;
         }
+        RequestMethod::Websocket => {
+            // require refactoring
+            // dummy code
+            let request = http_client.post(url);
+            return request;
+        }
     }
 }
 
@@ -86,6 +92,7 @@ pub enum WorkerState {
 #[getset(get = "pub", set = "pub")]
 pub struct WebAPISyncWorker {
     state: WorkerState,
+    // TODO: create a middle layer to support http get, post, websocket
     http_client: Client,
 }
 

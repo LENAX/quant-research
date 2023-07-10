@@ -243,7 +243,7 @@ impl SyncWorker for WebsocketSyncWorker {
                             Ok(value) => {
                                 let data_channel_lock = self.data_channel.read().await;
                                 let _ = data_channel_lock.send(value).await.expect("send failed");
-                                info!("Successfully send value {:?}", value);
+                                info!("Successfully send value");
                             },
                             Err(e) => {
                                 error!("Failed to parse text to json value");

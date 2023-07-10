@@ -496,6 +496,7 @@ mod tests {
             }
         });
 
+        // FIXME: loop will not quit after finishing tasks
         let _ = tokio::join!(send_task, receive_task);
 
         info!("Created task manager");

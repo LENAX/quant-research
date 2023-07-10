@@ -195,6 +195,10 @@ impl WebsocketSyncWorker {
     }
 }
 
+/// Hint: Use python package easyquotation to fetch second level full market quotation
+/// You can wrap up a python websocket service to host the data
+/// note that the quote may not be that accurate, so it is not recommended to use it in backtesting
+
 #[async_trait]
 impl SyncWorker for WebsocketSyncWorker {
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>> {
@@ -204,7 +208,7 @@ impl SyncWorker for WebsocketSyncWorker {
             return Err(Box::new(RequestMethodNotSupported));
         }
         let request_url = sync_task.spec().request_endpoint();
-        let (mut socket, response) =
+        let (mut socket, _) =
             connect(request_url).expect("Failed to connect");
         let msg_body = sync_task.spec().payload();
         if let Some(body) = msg_body {

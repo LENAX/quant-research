@@ -28,4 +28,5 @@ serde_urlencoded = "0.7.1"
 futures = "0.3.28"
 env_logger = { version = "0.10.0", features = ["auto-color", "color", "humantime"] }
 tungstenite = "0.19.0"
+anyhow = "1.0.71"
 # pretty_env_logger = "0.4"

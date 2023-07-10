@@ -2,22 +2,40 @@
 //! Handles synchronization task and sends web requests to remote data vendors
 //!
 
-use std::{collections::HashMap, error::Error, str::FromStr, sync::Arc, borrow::Borrow};
-
+use std::{collections::HashMap, error::{Error, self}, str::FromStr, sync::Arc, borrow::Borrow, fmt};
+use tokio::sync::RwLock;
 use async_trait::async_trait;
 use derivative::Derivative;
 use getset::{Getters, Setters};
 use reqwest::{Client, RequestBuilder};
 use serde_json::Value;
 use url::Url;
+use log::{info, trace, warn, error};
 
-use log::{error, info};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use tungstenite::{connect, Message};
 
-use crate::domain::synchronization::{
+
+use crate::{domain::synchronization::{
     sync_task::{SyncStatus, SyncTask},
     value_objects::task_spec::RequestMethod,
-};
+}, infrastructure::mq::message_bus::MessageBus};
+
+// use anyhow::Result;
+
+#[derive(Derivative, Debug,)]
+pub struct RequestMethodNotSupported;
+impl fmt::Display for RequestMethodNotSupported {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Request method is not supported for an http client!")
+    }
+}
+
+impl error::Error for RequestMethodNotSupported {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        None
+    }
+}
 
 #[async_trait]
 pub trait SyncWorker: Send + Sync {
@@ -47,7 +65,7 @@ fn build_request(
     request_method: RequestMethod,
     headers: Option<HeaderMap>,
     params: Option<Arc<Value>>,
-) -> RequestBuilder {
+) -> Result<RequestBuilder, RequestMethodNotSupported> {
     match request_method {
         RequestMethod::Get => {
             let mut request = http_client.get(url);
@@ -58,7 +76,7 @@ fn build_request(
             if let Some(headers) = headers {
                 request = request.headers(headers);
             }
-            return request;
+            return Ok(request);
         }
         RequestMethod::Post => {
             let mut request = http_client.post(url);
@@ -69,13 +87,10 @@ fn build_request(
                 let inner_value: &Value = params.borrow();
                 request = request.json(inner_value);
             }
-            return request;
+            return Ok(request);
         }
         RequestMethod::Websocket => {
-            // require refactoring
-            // dummy code
-            let request = http_client.post(url);
-            return request;
+            return Err(RequestMethodNotSupported)
         }
     }
 }
@@ -92,7 +107,6 @@ pub enum WorkerState {
 #[getset(get = "pub", set = "pub")]
 pub struct WebAPISyncWorker {
     state: WorkerState,
-    // TODO: create a middle layer to support http get, post, websocket
     http_client: Client,
 }
 
@@ -108,13 +122,14 @@ impl SyncWorker for WebAPISyncWorker {
             sync_task.spec().request_method().to_owned(),
             Some(headers),
             sync_task.spec().payload().clone(),
-        );
+        )?;
         let resp = request.send().await;
 
         match resp {
             Ok(resp) => {
                 info!("status: {}", resp.status());
                 let json: Value = resp.json().await?;
+                self.state = WorkerState::Sleeping;
                 sync_task
                     .set_result(Some(json))
                     .set_end_time(Some(chrono::offset::Local::now()))
@@ -123,6 +138,7 @@ impl SyncWorker for WebAPISyncWorker {
             }
             Err(error) => {
                 error!("error: {}", error);
+                self.state = WorkerState::Sleeping;
                 sync_task
                     .set_end_time(Some(chrono::offset::Local::now()))
                     .set_result_message(Some(error.to_string()))
@@ -139,6 +155,111 @@ impl WebAPISyncWorker {
             state: WorkerState::Sleeping,
             http_client,
         };
+    }
+}
+
+pub enum SyncWorkerMessage {
+    StopReceiveData,
+}
+
+pub enum SyncWorkerErrorMessage {
+    NoDataReceived,
+    ConnectionDroppedTimeout,
+    OtherError
+}
+
+#[derive(Derivative, Getters, Setters)]
+#[getset(get = "pub", set = "pub")]
+pub struct WebsocketSyncWorker {
+    state: WorkerState,
+    // send data received from remote
+    data_channel: Arc<RwLock<dyn MessageBus<Value> + Sync + Send>>,
+    // send and receive commands from other modules, typically when to stop receiving data
+    worker_msg_channel: Arc<RwLock<dyn MessageBus<SyncWorkerMessage> + Sync + Send>>,
+    // send error messages
+    error_msg_channel: Arc<RwLock<dyn MessageBus<SyncWorkerErrorMessage> + Sync + Send>>
+}
+
+impl WebsocketSyncWorker {
+    fn new(
+        data_channel: Arc<RwLock<dyn MessageBus<Value> + Sync + Send>>,
+        worker_msg_channel: Arc<RwLock<dyn MessageBus<SyncWorkerMessage> + Sync + Send>>,
+        error_msg_channel: Arc<RwLock<dyn MessageBus<SyncWorkerErrorMessage>  + Sync + Send>>,
+    ) -> WebsocketSyncWorker {
+        return Self {
+            state: WorkerState::Sleeping,
+            data_channel,
+            worker_msg_channel,
+            error_msg_channel
+        };
+    }
+}
+
+#[async_trait]
+impl SyncWorker for WebsocketSyncWorker {
+    async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>> {
+        self.state = WorkerState::Working;
+        if *sync_task.spec().request_method() != RequestMethod::Websocket {
+            self.state = WorkerState::Sleeping;
+            return Err(Box::new(RequestMethodNotSupported));
+        }
+        let request_url = sync_task.spec().request_endpoint();
+        let (mut socket, response) =
+            connect(request_url).expect("Failed to connect");
+        let msg_body = sync_task.spec().payload();
+        if let Some(body) = msg_body {
+            let text_msg = body.to_string();
+            socket.write_message(Message::Text(text_msg)).expect("Failed to send message!");
+        }
+
+        // When should receive end?
+        // Now we naively assume that worker should stop when no data is received.
+        // TODO: Support various types of closing strategy
+        // The rough idea is to have these async tasks working concurrently:
+        // 1. data receiving and sending task
+        // 2. worker message handling task
+        // 3. error message handling task
+        let mut running = true;
+        while running {
+            let command = self.worker_msg_channel.write().await.receive().await;
+            if let Ok(Some(command)) = command {
+                match command {
+                    SyncWorkerMessage::StopReceiveData => {
+                        running = false;
+                    }
+                }
+            }
+            let result = socket.read_message();
+            match result {
+                Ok(msg) => {
+                    if let Message::Text(s) = msg {
+                        info!("Received text response: {}",s);
+                        let parse_result: Result<Value, serde_json::Error> = serde_json::from_str(s.as_str());
+                        match parse_result {
+                            Ok(value) => {
+                                let data_channel_lock = self.data_channel.read().await;
+                                let _ = data_channel_lock.send(value).await.expect("send failed");
+                                info!("Successfully send value {:?}", value);
+                            },
+                            Err(e) => {
+                                error!("Failed to parse text to json value");
+                                let err_channel_lock = self.error_msg_channel.read().await;
+                                err_channel_lock.send(SyncWorkerErrorMessage::OtherError).await;
+                            }
+                        }
+                    }
+                    
+                },
+                Err(e) => {
+                    error!("Failed to read data from socket! error: {}", e);
+                    let err_channel_lock = self.error_msg_channel.read().await;
+                    err_channel_lock.send(SyncWorkerErrorMessage::NoDataReceived).await;
+                }
+            }
+
+        }
+
+        Ok(())
     }
 }
 
@@ -206,7 +327,7 @@ mod tests {
             RequestMethod::Post,
             None,
             Some(Arc::new(payload)),
-        );
+        ).expect("request method not supported!");
         let resp = request.send().await;
         match resp {
             Ok(resp) => {

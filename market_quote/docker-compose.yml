@@ -1,0 +1,216 @@
+version: '3'
+
+networks:
+  dbnet:
+    driver: bridge
+    ipam:
+      config:
+       - subnet: 10.5.0.0/16
+services:
+  controller:
+    image: ddb:latest
+    container_name: controller
+    hostname: controller
+    environment:
+      - DEPLOY_MODE=controller
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./config/dolphindb.lic:/data/ddb/server/dolphindb.lic
+      - ./cluster/controller/master:/data/ddb/server/master
+      - ./cluster/controller/log:/data/ddb/server/log
+      - ./config/controller.cfg:/data/ddb/server/config/controller.cfg
+      - ./config/cluster.cfg:/data/ddb/server/config/cluster.cfg
+      - ./config/cluster.nodes:/data/ddb/server/config/cluster.nodes
+    ports:
+      - "19000:8888"
+    networks:
+      dbnet:
+        ipv4_address: 10.5.0.100
+
+  agent1:
+    image: ddb:latest
+    container_name: agent1
+    hostname: agent1
+    environment:
+      - DEPLOY_MODE=agent
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "19001:19001"
+    volumes:
+      - /hdd/hdd1/dolphindb/server1/log:/data/ddb/server/log
+      - /hdd/hdd1/dolphindb/server1/P1-agent:/data/ddb/server/P1-agent
+      - /hdd/hdd1/dolphindb/server1/P1-node1:/data/ddb/server/P1-node1
+      - ./config/dolphindb.lic:/data/ddb/server/dolphindb.lic
+      - ./config/agent1.cfg:/data/ddb/server/config/agent.cfg
+      - /hdd/hdd1/data2:/data2
+    networks:
+      dbnet:
+        ipv4_address: 10.5.0.2
+
+  agent2:
+    image: ddb:latest
+    container_name: agent2
+    hostname: agent2
+    environment:
+      - DEPLOY_MODE=agent
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes: 
+      - /hdd/hdd2/dolphindb/server2/log:/data/ddb/server/log
+      - /hdd/hdd2/dolphindb/server2/P2-agent:/data/ddb/server/P2-agent
+      - /hdd/hdd2/dolphindb/server2/P2-node1:/data/ddb/server/P2-node1
+      - ./config/dolphindb.lic:/data/ddb/server/dolphindb.lic
+      - ./config/agent2.cfg:/data/ddb/server/config/agent.cfg
+      - /hdd/hdd2/data2:/data2
+    ports:
+      - "19002:19001"
+    networks:
+      dbnet:
+        ipv4_address: 10.5.0.3
+
+  agent3:
+    image: ddb:latest
+    container_name: agent3
+    hostname: agent3
+    environment:
+      - DEPLOY_MODE=agent
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - /hdd/hdd3/dolphindb/server3/log:/data/ddb/server/log
+      - /hdd/hdd3/dolphindb/server3/P3-agent:/data/ddb/server/P3-agent
+      - /hdd/hdd3/dolphindb/server3/P3-node1:/data/ddb/server/P3-node1
+      - ./config/dolphindb.lic:/data/ddb/server/dolphindb.lic
+      - ./config/agent3.cfg:/data/ddb/server/config/agent.cfg
+      - /hdd/hdd3/data2:/data2
+    ports:
+      - "19003:19001"
+    networks:
+      dbnet:
+        ipv4_address: 10.5.0.4
+
+  agent4:
+    image: ddb:latest
+    container_name: agent4
+    hostname: agent4
+    environment:
+      - DEPLOY_MODE=agent
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - /hdd/hdd4/dolphindb/server4/log:/data/ddb/server/log
+      - /hdd/hdd4/dolphindb/server4/P4-agent:/data/ddb/server/P4-agent
+      - /hdd/hdd4/dolphindb/server4/P4-node1:/data/ddb/server/P4-node1
+      - ./config/dolphindb.lic:/data/ddb/server/dolphindb.lic
+      - ./config/agent4.cfg:/data/ddb/server/config/agent.cfg
+      - /hdd/hdd4/data2:/data2
+    ports:
+      - "19004:19001"
+    networks:
+      dbnet:
+        ipv4_address: 10.5.0.5
+
+  agent5:
+    image: ddb:latest
+    container_name: agent5
+    hostname: agent5
+    environment:
+      - DEPLOY_MODE=agent
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - /hdd/hdd5/dolphindb/server5/log:/data/ddb/server/log
+      - /hdd/hdd5/dolphindb/server5/P5-agent:/data/ddb/server/P5-agent
+      - /hdd/hdd5/dolphindb/server5/P5-node1:/data/ddb/server/P5-node1
+      - ./config/dolphindb.lic:/data/ddb/server/dolphindb.lic
+      - ./config/agent5.cfg:/data/ddb/server/config/agent.cfg
+      - /hdd/hdd5/data2:/data2
+    ports:
+      - "19005:19001"
+    networks:
+      dbnet:
+        ipv4_address: 10.5.0.6
+
+  agent6:
+    image: ddb:latest
+    container_name: agent6
+    hostname: agent6
+    environment:
+      - DEPLOY_MODE=agent
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - /hdd/hdd6/dolphindb/server6/log:/data/ddb/server/log
+      - /hdd/hdd6/dolphindb/server6/P6-agent:/data/ddb/server/P6-agent
+      - /hdd/hdd6/dolphindb/server6/P6-node1:/data/ddb/server/P6-node1
+      - ./config/dolphindb.lic:/data/ddb/server/dolphindb.lic
+      - ./config/agent6.cfg:/data/ddb/server/config/agent.cfg
+      - /hdd/hdd6/data2:/data2
+    ports:
+      - "19006:19001"
+    networks:
+      dbnet:
+        ipv4_address: 10.5.0.7
+
+  agent7:
+    image: ddb:latest
+    container_name: agent7
+    hostname: agent7
+    environment:
+      - DEPLOY_MODE=agent
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - /hdd/hdd7/dolphindb/server7/log:/data/ddb/server/log
+      - /hdd/hdd7/dolphindb/server7/P7-agent:/data/ddb/server/P7-agent
+      - /hdd/hdd7/dolphindb/server7/P7-node1:/data/ddb/server/P7-node1
+      - ./config/dolphindb.lic:/data/ddb/server/dolphindb.lic
+      - ./config/agent7.cfg:/data/ddb/server/config/agent.cfg
+      - /hdd/hdd7/data2:/data2
+    ports:
+      - "19007:19001"
+    networks:
+      dbnet:
+        ipv4_address: 10.5.0.8

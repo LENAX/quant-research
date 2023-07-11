@@ -33,8 +33,9 @@ impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> 
         Ok(Some(received_value))
     }
 
-    async fn close(&self) {
-        self.sender.closed().await;
+    async fn close(&mut self) {
+        self.receiver.close();
+        // self.sender.closed().await;
     }
 }
 

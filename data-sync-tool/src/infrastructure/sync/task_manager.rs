@@ -223,9 +223,9 @@ where
     }
 
     pub async fn stop(&self) -> Result<(), Box<dyn Error>> {
-        let task_channel_lock = self.task_channel.read().await;
-        let error_message_channel_lock = self.error_message_channel.read().await;
-        let failed_task_channel = self.failed_task_channel.read().await;
+        let mut task_channel_lock = self.task_channel.write().await;
+        let mut error_message_channel_lock = self.error_message_channel.write().await;
+        let mut failed_task_channel = self.failed_task_channel.write().await;
 
         let _ = join!(
             task_channel_lock.close(),
@@ -306,8 +306,9 @@ where
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
         }
-
+        println!("Waiting for failure handling tasks.");
         let _ = handle_failures.await;
+        println!("Done!");
         Ok(())
     }
 }
@@ -398,7 +399,7 @@ mod tests {
             let max_request: i64 = rng.gen_range(30..100);
             let cooldown: i64 = rng.gen_range(1..3);
             let limiter = new_web_request_limiter(max_request, None, Some(cooldown));
-            let q = new_queue_with_random_amount_of_tasks(limiter, 1, 10).await;
+            let q = new_queue_with_random_amount_of_tasks(limiter, 100, 300).await;
             return q;
         })).await;
         return queues;
@@ -459,6 +460,9 @@ mod tests {
     async fn test_producing_and_consuming_tasks() {
         env_logger::init();
 
+        // FIXME: only works with one queue and no more than 5 tasks.
+        // Find where deadlocks can happen.
+
         let mut manager_queue_map: HashMap<Uuid, (SyncTaskQueue<WebRequestRateLimiter>, u32)> = HashMap::new();
         generate_queues_with_web_request_limiter(1).await
             .into_iter()
@@ -488,10 +492,21 @@ mod tests {
             loop {
                 let channel_clone = task_channel_clone.clone();
                 let mut task_channel_lock = channel_clone.write().await;
-                let task = task_channel_lock.receive().await;
-                if let Ok(Some(task)) = task {
-                    println!("Received task: {:?}", task);
+                let result = task_channel_lock.receive().await;
+                match result {
+                    Ok(Some(task)) => {
+                        println!("Received task: {:?}", task);
+                    },
+                    Ok(None) => {
+                        println!("Received no task!");
+                        break;
+                    },
+                    Err(e) => { 
+                        println!("Failed: {}", e); 
+                        break;
+                    }
                 }
+                
                 drop(task_channel_lock);
             }
         });

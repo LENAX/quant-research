@@ -213,6 +213,7 @@ where
     pub async fn all_queues_are_empty(&self) -> bool {
         let queues = self.queues.lock().await;
         for (q, _) in queues.values() {
+            println!("q size: {}", q.len().await);
             if !q.is_empty().await {
                 return false;
             }
@@ -256,7 +257,9 @@ where
         loop {
             // Check whether all queues are empty
             // break the loop if all queues are empty
-            if self.all_queues_are_empty().await {
+            let queue_empty = self.all_queues_are_empty().await;
+            println!("queues are empty: {}", queue_empty);
+            if queue_empty {
                 println!("All task queues are empty. Exit.");
                 // Should I close all channels after exiting? Probably I should.
                 self.stop().await?;
@@ -318,6 +321,8 @@ mod tests {
             sync::sync_rate_limiter::WebRequestRateLimiter,
             mq::tokio_channel_mq::TokioMpscMessageBus},
     };
+    use log::{info, trace, warn, error};
+
 
     use super::*;
     use std::{sync::Arc, hash::Hash};
@@ -330,7 +335,9 @@ mod tests {
     use rbatis::dark_std::errors::new;
     use serde_json::Value;
     use url::Url;
+    use env_logger;
 
+    
     fn random_string(len: usize) -> String {
         let mut rng = rand::thread_rng();
         std::iter::repeat(())
@@ -388,14 +395,15 @@ mod tests {
     pub async fn generate_queues_with_web_request_limiter(n: u32) -> Vec<SyncTaskQueue<WebRequestRateLimiter>> {
         let queues = join_all((0..n).map(|_| async {
             let mut rng = rand::thread_rng();
-            let max_request: i64 = rng.gen();
-            let cooldown: i64 = rng.gen();
+            let max_request: i64 = rng.gen_range(30..100);
+            let cooldown: i64 = rng.gen_range(1..3);
             let limiter = new_web_request_limiter(max_request, None, Some(cooldown));
-            let q = new_queue_with_random_amount_of_tasks(limiter, 1, 500).await;
+            let q = new_queue_with_random_amount_of_tasks(limiter, 1, 10).await;
             return q;
         })).await;
         return queues;
     }
+
 
     #[test]
     fn it_should_generate_random_tasks(){
@@ -431,7 +439,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_many_queues_to_manager() {
         let mut manager_queue_map: HashMap<Uuid, (SyncTaskQueue<WebRequestRateLimiter>, u32)> = HashMap::new();
-        generate_queues_with_web_request_limiter(100).await
+        generate_queues_with_web_request_limiter(10).await
             .into_iter()
             .for_each(|q| {
                 manager_queue_map.insert(uuid::Uuid::new_v4(), (q, 10 as u32));
@@ -443,10 +451,54 @@ mod tests {
 
         let task_manager = TaskManager::new(
             manager_queue_map, task_channel, error_msg_channel, failed_task_channel);
+        
+        return ();
     }
 
     #[tokio::test]
     async fn test_producing_and_consuming_tasks() {
+        env_logger::init();
 
+        let mut manager_queue_map: HashMap<Uuid, (SyncTaskQueue<WebRequestRateLimiter>, u32)> = HashMap::new();
+        generate_queues_with_web_request_limiter(1).await
+            .into_iter()
+            .for_each(|q| {
+                manager_queue_map.insert(uuid::Uuid::new_v4(), (q, 10 as u32));
+                return ;
+            });
+        let task_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncTask>::new(500)));
+        let failed_task_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(500)));
+        let error_msg_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<TaskManagerError>::new(500)));
+        
+        let task_channel_clone = task_channel.clone();
+        let failed_task_channel_clone = failed_task_channel.clone();
+        let error_msg_channel = error_msg_channel.clone();
+        let mut task_manager = TaskManager::new(
+            manager_queue_map, task_channel, error_msg_channel, failed_task_channel);
+        
+        let send_task = tokio::spawn(async move {
+            let result = task_manager.start().await;
+            match result {
+                Ok(()) => { println!("Finished successfully!"); },
+                Err(e) => { println!("Failed: {}", e); }
+            }
+        });
+
+        let receive_task = tokio::spawn(async move{
+            loop {
+                let channel_clone = task_channel_clone.clone();
+                let mut task_channel_lock = channel_clone.write().await;
+                let task = task_channel_lock.receive().await;
+                if let Ok(Some(task)) = task {
+                    println!("Received task: {:?}", task);
+                }
+                drop(task_channel_lock);
+            }
+        });
+
+        // FIXME: loop will not quit after finishing tasks
+        let _ = tokio::join!(send_task, receive_task);
+
+        info!("Created task manager");
     }
 }

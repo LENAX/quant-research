@@ -28,3 +28,7 @@ Cargo.lock
 settings.json
 */.vs/*.**
 data-sync-tool/.vs/**
+
+*.db
+**/*.db
+market_quote/*.db

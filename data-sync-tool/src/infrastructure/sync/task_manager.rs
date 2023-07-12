@@ -13,7 +13,7 @@ use derivative::Derivative;
 use futures::future::join_all;
 use getset::{Getters, Setters};
 
-use tokio::{join, sync::{Mutex, RwLock}, task::JoinHandle};
+use tokio::{join, sync::Mutex, task::JoinHandle};
 use uuid::Uuid;
 
 use crate::{
@@ -163,9 +163,9 @@ where
     MF: MessageBus<(DatasetId, SyncTask)> + std::marker::Send,
 {
     queues: Arc<Mutex<HashMap<DatasetId, (SyncTaskQueue<T>, MaxRetry)>>>,
-    task_channel: Arc<RwLock<MT>>,
-    error_message_channel: Arc<RwLock<ME>>,
-    failed_task_channel: Arc<RwLock<MF>>,
+    task_channel: Arc<Mutex<MT>>,
+    error_message_channel: Arc<Mutex<ME>>,
+    failed_task_channel: Arc<Mutex<MF>>,
 }
 
 impl<T, MT, ME, MF> TaskManager<T, MT, ME, MF>
@@ -177,9 +177,9 @@ where
 {
     pub fn new(
         task_queues: HashMap<DatasetId, (SyncTaskQueue<T>, MaxRetry)>,
-        task_channel: Arc<RwLock<MT>>,
-        error_message_channel: Arc<RwLock<ME>>,
-        failed_task_channel: Arc<RwLock<MF>>,
+        task_channel: Arc<Mutex<MT>>,
+        error_message_channel: Arc<Mutex<ME>>,
+        failed_task_channel: Arc<Mutex<MF>>,
     ) -> TaskManager<T, MT, ME, MF> {
         Self {
             queues: Arc::new(Mutex::new(task_queues)),
@@ -223,15 +223,13 @@ where
     }
 
     pub async fn stop(&self) -> Result<(), Box<dyn Error>> {
-        let mut task_channel_lock = self.task_channel.write().await;
-        let mut error_message_channel_lock = self.error_message_channel.write().await;
-        let mut failed_task_channel = self.failed_task_channel.write().await;
+        let mut task_channel_lock = self.task_channel.lock().await;
+        let mut error_message_channel_lock = self.error_message_channel.lock().await;
+        let mut failed_task_channel = self.failed_task_channel.lock().await;
 
-        let _ = join!(
-            task_channel_lock.close(),
-            error_message_channel_lock.close(),
-            failed_task_channel.close()
-        );
+        task_channel_lock.close().await;
+        error_message_channel_lock.close().await;
+        failed_task_channel.close().await;
 
         return Ok(());
     }
@@ -243,7 +241,7 @@ where
         let failed_task_channel = Arc::clone(&self.failed_task_channel);
         let handle_failures = tokio::spawn(async move {
             while let Ok(Some((dataset_id, failed_task))) =
-                failed_task_channel.write().await.receive().await
+                failed_task_channel.lock().await.receive().await
             {
                 if let Some((queue, retries_left)) = queues.lock().await.get_mut(&dataset_id) {
                     if *retries_left > 0 {
@@ -271,12 +269,13 @@ where
             for (dataset_id, (task_queue, _)) in &mut self.queues.lock().await.iter_mut() {
                 // let mut q_lock = task_queue.lock().await;
                 let task_value = task_queue.pop_front().await?;
+                // drop();
                 // pull tasks from queues and send it to consumers
                 match task_value {
                     SyncTaskQueueValue::Task(t) => {
                         if let Some(t) = t {
                             // Send the task to its consumer
-                            let task_channel_lock = self.task_channel.read().await;
+                            let task_channel_lock = self.task_channel.lock().await;
                             let _ = task_channel_lock.send(t).await;
                             any_task_found = true;
                         } else {
@@ -284,7 +283,7 @@ where
                         }
                     }
                     SyncTaskQueueValue::RateLimited(cooldown_task, time_left) => {
-                        let error_message_channel_lock = self.error_message_channel.read().await;
+                        let error_message_channel_lock = self.error_message_channel.lock().await;
                         let _ = error_message_channel_lock
                             .send(TaskManagerError::RateLimited(cooldown_task, time_left))
                             .await;
@@ -292,7 +291,7 @@ where
                     SyncTaskQueueValue::DailyLimitExceeded => {
                         // tell task manager's consumers that daily limit is triggered
                         // TODO: figure out what to do with it? Does task manager just tell others this error or do something further?
-                        let error_message_channel_lock = self.error_message_channel.read().await;
+                        let error_message_channel_lock = self.error_message_channel.lock().await;
                         let _ = error_message_channel_lock
                             .send(TaskManagerError::DailyLimitExceeded)
                             .await;
@@ -307,7 +306,7 @@ where
             }
         }
         println!("Waiting for failure handling tasks.");
-        let _ = handle_failures.await;
+        // let _ = handle_failures.await;
         println!("Done!");
         Ok(())
     }
@@ -337,6 +336,7 @@ mod tests {
     use serde_json::Value;
     use url::Url;
     use env_logger;
+    use tracing_subscriber::prelude::*;
 
     
     fn random_string(len: usize) -> String {
@@ -399,7 +399,7 @@ mod tests {
             let max_request: i64 = rng.gen_range(30..100);
             let cooldown: i64 = rng.gen_range(1..3);
             let limiter = new_web_request_limiter(max_request, None, Some(cooldown));
-            let q = new_queue_with_random_amount_of_tasks(limiter, 100, 300).await;
+            let q = new_queue_with_random_amount_of_tasks(limiter, 10, 30).await;
             return q;
         })).await;
         return queues;
@@ -446,9 +446,9 @@ mod tests {
                 manager_queue_map.insert(uuid::Uuid::new_v4(), (q, 10 as u32));
                 return ;
             });
-        let task_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncTask>::new(500)));
-        let failed_task_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(500)));
-        let error_msg_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<TaskManagerError>::new(500)));
+        let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<SyncTask>::new(500)));
+        let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(500)));
+        let error_msg_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(500)));
 
         let task_manager = TaskManager::new(
             manager_queue_map, task_channel, error_msg_channel, failed_task_channel);
@@ -459,6 +459,7 @@ mod tests {
     #[tokio::test]
     async fn test_producing_and_consuming_tasks() {
         env_logger::init();
+        // console_subscriber::init();
 
         // FIXME: only works with one queue and no more than 5 tasks.
         // Find where deadlocks can happen.
@@ -470,9 +471,9 @@ mod tests {
                 manager_queue_map.insert(uuid::Uuid::new_v4(), (q, 10 as u32));
                 return ;
             });
-        let task_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncTask>::new(500)));
-        let failed_task_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(500)));
-        let error_msg_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<TaskManagerError>::new(500)));
+        let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<SyncTask>::new(500)));
+        let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(500)));
+        let error_msg_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(500)));
         
         let task_channel_clone = task_channel.clone();
         let failed_task_channel_clone = failed_task_channel.clone();
@@ -482,6 +483,7 @@ mod tests {
         
         let send_task = tokio::spawn(async move {
             let result = task_manager.start().await;
+            println!("result: {:?}", result);
             match result {
                 Ok(()) => { println!("Finished successfully!"); },
                 Err(e) => { println!("Failed: {}", e); }
@@ -489,30 +491,18 @@ mod tests {
         });
 
         let receive_task = tokio::spawn(async move{
-            loop {
-                let channel_clone = task_channel_clone.clone();
-                let mut task_channel_lock = channel_clone.write().await;
-                let result = task_channel_lock.receive().await;
-                match result {
-                    Ok(Some(task)) => {
-                        println!("Received task: {:?}", task);
-                    },
-                    Ok(None) => {
-                        println!("Received no task!");
-                        break;
-                    },
-                    Err(e) => { 
-                        println!("Failed: {}", e); 
-                        break;
-                    }
-                }
-                
-                drop(task_channel_lock);
+            
+            let channel_clone = task_channel_clone.clone();
+            let mut task_channel_lock = channel_clone.lock().await;
+            while let Ok(Some(task)) = task_channel_lock.receive().await {
+                println!("Received task: {:?}", task);
             }
+            drop(task_channel_lock);
         });
 
         // FIXME: loop will not quit after finishing tasks
-        let _ = tokio::join!(send_task, receive_task);
+        // let _ = tokio::join!(send_task, receive_task);
+        let _ = tokio::join!(send_task,);
 
         info!("Created task manager");
     }

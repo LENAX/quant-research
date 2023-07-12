@@ -64,7 +64,7 @@ impl RateLimiter for WebRequestRateLimiter {
 
             if reset_timer {
                 // if the timer is not activated, or the caller explicitly asks to reset the timer
-                let cool_down_second_lock = self.cool_down_seconds.read().await;
+                let cool_down_second_lock = self.cool_down_seconds.write().await;
                 *count_down_lock = Some(Duration::seconds(*cool_down_second_lock));
                 println!("In RateLimiter {}, countdown: {:?}", self.id, count_down_lock);
             }
@@ -88,13 +88,16 @@ impl RateLimiter for WebRequestRateLimiter {
                         println!("In RateLimiter {}, Time left: {}", limiter_id, *count_down);
                         if *count_down <= Duration::seconds(0) {
                             println!("In RateLimiter {}, time is up! Counting down: {}", limiter_id, *count_down);
-                            *count_down_lock = None; // break out of the loop when the count down is reached.
+                            drop(count_down_lock); // break out of the loop when the count down is reached.
                             
                             // Then recover the limit
+                            println!("try to recover the limit...");
                             let max_minute_request_lock = max_minute_request_clone.read().await;
+                            println!("max_minute_request_lock acquired...");
                             let mut remaining_minute_requests_lock = remaining_minute_request_clone.lock().await;
+                            println!("remaining_minute_requests_lock acquired...");
                             *remaining_minute_requests_lock = *max_minute_request_lock;
-
+                            println!("remaining_minute resetted...");
                             // stop counting time
                             break;
                         }
@@ -104,6 +107,7 @@ impl RateLimiter for WebRequestRateLimiter {
                     }
                 }
             }
+            println!("Timer stopped...");
         });
 
         return Ok(task);

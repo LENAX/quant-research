@@ -394,8 +394,8 @@ mod tests {
 
     pub async fn new_queue_with_random_amount_of_tasks<T: RateLimiter>(rate_limiter: T, min_tasks: u32, max_tasks: u32) -> SyncTaskQueue<T> {
         let mut rng = rand::thread_rng();
-        // let mut new_queue = new_empty_queue(rate_limiter);
-        let mut new_queue = new_empty_queue_limitless(None);
+        let mut new_queue = new_empty_queue(rate_limiter);
+        // let mut new_queue = new_empty_queue_limitless(None);
         let n_task = rng.gen_range(min_tasks..max_tasks);
         let random_tasks = generate_random_sync_tasks(n_task);
         // let mut q_lock = new_queue.lock().await;
@@ -476,9 +476,11 @@ mod tests {
 
         // FIXME: only works with one queue and no more than 5 tasks.
         // Find where deadlocks can happen. 
-        let min_task = 90;
-        let max_task = 100;
-        let n_queues = 3;
+        let min_task = 100;
+        let max_task = 120;
+        let n_queues = 50;
+
+        // FIXME: RateLimiter may cause deadlock
         let mut manager_queue_map: HashMap<Uuid, (SyncTaskQueue<WebRequestRateLimiter>, u32)> = HashMap::new();
         generate_queues_with_web_request_limiter(n_queues, min_task, max_task).await
             .into_iter()
@@ -487,12 +489,12 @@ mod tests {
                 return ;
             });
         let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<SyncTask>::new(10000)));
-        let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(500)));
-        let error_msg_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(500)));
+        let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(5000)));
+        let error_msg_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(5000)));
         
         let task_channel_clone = task_channel.clone();
         let failed_task_channel_clone = failed_task_channel.clone();
-        let error_msg_channel = error_msg_channel.clone();
+        let error_msg_channel_clone = error_msg_channel.clone();
         let mut task_manager = TaskManager::new(
             manager_queue_map, task_channel, error_msg_channel, failed_task_channel);
         
@@ -507,15 +509,31 @@ mod tests {
 
         let receive_task = tokio::spawn(async move{
             let channel_clone = task_channel_clone.clone();
+            let err_channel_clone = error_msg_channel_clone.clone();
             println!("Before acquiring the mq lock...");
-            let mut task_channel_lock = channel_clone.lock().await;
+            
+            
+
             println!("MQ lock acquired...");
             let mut task_cnt = 0;
-            while let Some(received) = task_channel_lock.receive().await {
-                task_cnt += 1;
-                println!("Received task, count: {:?}", task_cnt);
-                
-            }
+            let recv_task = tokio::spawn(async move {
+                let mut task_channel_lock = channel_clone.lock().await;
+                while let Some(_) = task_channel_lock.receive().await {
+                    task_cnt += 1;
+                    println!("Received task, count: {:?}", task_cnt);
+                    
+                }
+            });
+            let err_report_task = tokio::spawn(async move {
+                let mut err_channel_lock = err_channel_clone.lock().await;
+                while let Some(err) = err_channel_lock.receive().await {
+                    println!("Received err, err: {:?}", err);
+                    
+                }
+            });
+
+            join!(recv_task, err_report_task);
+            
             // let _ = task_channel_lock.close();
             println!("Done receiving tasks...");
             println!("Receiver tries to release the mq lock...");

@@ -1,6 +1,7 @@
 use std::error::Error;
 
 use async_trait::async_trait;
+use futures::channel::mpsc::TryRecvError;
 use tokio::sync::mpsc;
 use core::fmt::Debug;
 
@@ -28,9 +29,18 @@ impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> 
         Ok(())
     }
 
-    async fn receive(&mut self) -> Result<Option<T>, Box<dyn Error + Send + Sync>> {
-        let received_value = self.receiver.recv().await.ok_or("Failed to receive message")?;
-        Ok(Some(received_value))
+    async fn receive(&mut self) -> Option<T> {
+        // let received_value = self.receiver.recv().await.ok_or("Failed to receive message")?;
+        let received_value = self.receiver.try_recv();
+        match received_value {
+            Ok(value) => {
+                Some(value)
+            },
+            TryRecvError => {
+                None
+            }
+        }
+        
     }
 
     async fn close(&mut self) {
@@ -60,8 +70,8 @@ mod tests {
 
         // Test receiving a message
         let received_message = message_bus.receive().await;
-        assert!(received_message.is_ok(), "Failed to receive message");
-        assert_eq!(received_message.unwrap(), Some(String::from("test message")), "Received unexpected message");
+        assert!(received_message.is_none(), "Failed to receive message");
+        assert_eq!(received_message, Some(String::from("test message")), "Received unexpected message");
     }
 
     #[tokio::test]

@@ -13,7 +13,7 @@ use derivative::Derivative;
 use futures::future::join_all;
 use getset::{Getters, Setters};
 
-use tokio::{join, sync::Mutex, task::JoinHandle};
+use tokio::{join, sync::{Mutex, RwLock}, task::JoinHandle};
 use uuid::Uuid;
 
 use crate::{
@@ -29,6 +29,7 @@ type DatasetId = Uuid;
 type CooldownTimerTask = JoinHandle<()>;
 type TimeSecondLeft = i64;
 
+#[derive(Debug)]
 pub enum SyncTaskQueueValue {
     Task(Option<SyncTask>),
     RateLimited(Option<CooldownTimerTask>, TimeSecondLeft), // timer task, seco
@@ -38,13 +39,13 @@ pub enum SyncTaskQueueValue {
 #[derive(Derivative, Getters, Setters, Debug)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncTaskQueue<T: RateLimiter> {
-    tasks: Mutex<VecDeque<SyncTask>>,
+    tasks: VecDeque<SyncTask>,
     rate_limiter: Option<T>,
 }
 
 impl<T: RateLimiter> SyncTaskQueue<T> {
     pub fn new(tasks: Vec<SyncTask>, rate_limiter: Option<T>) -> SyncTaskQueue<T> {
-        let task_queue = Mutex::new(VecDeque::from(tasks));
+        let task_queue = VecDeque::from(tasks);
         if let Some(rate_limiter) = rate_limiter {
             SyncTaskQueue {
                 tasks: task_queue,
@@ -61,7 +62,7 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
     pub async fn pop_front(&mut self) -> Result<SyncTaskQueueValue, TimerError> {
         //! try to pop the front of the task queue
         //! if the queue is empty, or the queue has a rate limiter, and the rate limiter rejects the request, return None
-        let mut q_lock = self.tasks.lock().await;
+        // let mut q_lock = self.tasks.lock().await;
         match &mut self.rate_limiter {
             Some(rate_limiter) => {
                 let rate_limiter_response = rate_limiter.can_proceed().await;
@@ -71,7 +72,7 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
                             "Rate limiter permits this request. There are {} requests left.",
                             available_request_left
                         );
-                        let value = q_lock.pop_front();
+                        let value = self.tasks.pop_front();
                         if let Some(value) = value {
                             return Ok(SyncTaskQueueValue::Task(Some(value)));
                         } else {
@@ -98,7 +99,7 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
                 }
             }
             None => {
-                let value = q_lock.pop_front();
+                let value = self.tasks.pop_front();
                 if let Some(value) = value {
                     return Ok(SyncTaskQueueValue::Task(Some(value.clone())));
                 } else {
@@ -108,39 +109,34 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
         }
     }
 
-    pub async fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Vec<SyncTask> {
+    pub fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Vec<SyncTask> {
         //! Pops all elements in the queue given the range
         //! Typically used when the remote reports a daily limited reached error
-        let mut q_lock = self.tasks.lock().await;
-        let values = q_lock.drain(range);
+        // let mut q_lock = .lock().await;
+        let values = self.tasks.drain(range);
         return values.collect::<Vec<_>>();
     }
 
-    pub async fn push_back(&mut self, task: SyncTask) {
-        let mut q_lock = self.tasks.lock().await;
-        q_lock.push_back(task);
+    pub fn push_back(&mut self, task: SyncTask) {
+        self.tasks.push_back(task);
         return ();
     }
 
-    pub async fn push_front(&mut self, task: SyncTask) {
-        let mut q_lock = self.tasks.lock().await;
-        q_lock.push_front(task);
+    pub fn push_front(&mut self, task: SyncTask) {
+        self.tasks.push_front(task);
         return ();
     }
 
-    pub async fn front(&self) -> Option<SyncTask> {
-        let q_lock = self.tasks.lock().await;
-        q_lock.front().cloned()
+    pub fn front(&self) -> Option<SyncTask> {
+        self.tasks.front().cloned()
     }
 
-    pub async fn is_empty(&self) -> bool {
-        let q_lock = self.tasks.lock().await;
-        return q_lock.is_empty();
+    pub fn is_empty(&self) -> bool {
+        return self.tasks.is_empty();
     }
 
-    pub async fn len(&self) -> usize {
-        let q_lock = self.tasks.lock().await;
-        return q_lock.len();
+    pub fn len(&self) -> usize {
+        return self.tasks.len();
     }
 }
 
@@ -203,7 +199,7 @@ where
                 let task_queue = q_lock.get_mut(dataset_id);
                 if let Some((task_queue, _)) = task_queue {
                     // let mut task_queue_lock = task_queue.lock().await;
-                    task_queue.push_back(task).await;
+                    task_queue.push_back(task);
                 }
             }
         }
@@ -213,8 +209,8 @@ where
     pub async fn all_queues_are_empty(&self) -> bool {
         let queues = self.queues.lock().await;
         for (q, _) in queues.values() {
-            println!("q size: {}", q.len().await);
-            if !q.is_empty().await {
+            println!("q size: {}", q.len());
+            if !q.is_empty() {
                 return false;
             }
         }
@@ -227,10 +223,11 @@ where
         let mut error_message_channel_lock = self.error_message_channel.lock().await;
         let mut failed_task_channel = self.failed_task_channel.lock().await;
 
-        task_channel_lock.close().await;
-        error_message_channel_lock.close().await;
-        failed_task_channel.close().await;
-
+        join!(
+            task_channel_lock.close(),
+            error_message_channel_lock.close(),
+            failed_task_channel.close()
+        );
         return Ok(());
     }
 
@@ -240,12 +237,12 @@ where
         let queues = self.queues.clone();
         let failed_task_channel = Arc::clone(&self.failed_task_channel);
         let handle_failures = tokio::spawn(async move {
-            while let Ok(Some((dataset_id, failed_task))) =
+            while let Some((dataset_id, failed_task)) =
                 failed_task_channel.lock().await.receive().await
             {
                 if let Some((queue, retries_left)) = queues.lock().await.get_mut(&dataset_id) {
                     if *retries_left > 0 {
-                        queue.push_back(failed_task).await;
+                        queue.push_back(failed_task);
                         *retries_left -= 1;
                     }
                 }
@@ -253,8 +250,6 @@ where
         });
 
         loop {
-            // Check whether all queues are empty
-            // break the loop if all queues are empty
             let queue_empty = self.all_queues_are_empty().await;
             println!("queues are empty: {}", queue_empty);
             if queue_empty {
@@ -264,19 +259,28 @@ where
 
                 break;
             }
-
             let mut any_task_found = false;
+            println!("Before entering queue selection loop...");
             for (dataset_id, (task_queue, _)) in &mut self.queues.lock().await.iter_mut() {
+                // Check whether all queues are empty
+                // break the loop if all queues are empty
+                println!("Acquired queues lock...");
+                
                 // let mut q_lock = task_queue.lock().await;
                 let task_value = task_queue.pop_front().await?;
+                println!("Fetched task!");
                 // drop();
                 // pull tasks from queues and send it to consumers
                 match task_value {
                     SyncTaskQueueValue::Task(t) => {
                         if let Some(t) = t {
                             // Send the task to its consumer
+                            println!("Task manager tries to acquire the mq lock...");
                             let task_channel_lock = self.task_channel.lock().await;
+                            println!("Task manager acquired the mq lock...");
                             let _ = task_channel_lock.send(t).await;
+                            // drop(task_channel_lock);
+                            println!("Task manager released the mq lock...");
                             any_task_found = true;
                         } else {
                             println!("Received no task from queue {}!", dataset_id);
@@ -284,6 +288,7 @@ where
                     }
                     SyncTaskQueueValue::RateLimited(cooldown_task, time_left) => {
                         let error_message_channel_lock = self.error_message_channel.lock().await;
+                        println!("Error! Rate limited!");
                         let _ = error_message_channel_lock
                             .send(TaskManagerError::RateLimited(cooldown_task, time_left))
                             .await;
@@ -292,21 +297,24 @@ where
                         // tell task manager's consumers that daily limit is triggered
                         // TODO: figure out what to do with it? Does task manager just tell others this error or do something further?
                         let error_message_channel_lock = self.error_message_channel.lock().await;
+                        println!("Error! DailyLimitExceeded!");
                         let _ = error_message_channel_lock
                             .send(TaskManagerError::DailyLimitExceeded)
                             .await;
                     }
                 }
-            }
 
-            // TODO: handle failed tasks, push them back to queue
+                println!("Queue selection finished...");
+                // TODO: handle failed tasks, push them back to queue
 
-            if !any_task_found {
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                if !any_task_found {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
             }
         }
+        
         println!("Waiting for failure handling tasks.");
-        // let _ = handle_failures.await;
+        let _ = handle_failures.await;
         println!("Done!");
         Ok(())
     }
@@ -380,26 +388,31 @@ mod tests {
         return  SyncTaskQueue::<T>::new(vec![], Some(rate_limiter));
     }
 
+    pub fn new_empty_queue_limitless<T: RateLimiter>(rate_limiter: Option<T>) -> SyncTaskQueue<T> {
+        return  SyncTaskQueue::new(vec![], None);
+    }
+
     pub async fn new_queue_with_random_amount_of_tasks<T: RateLimiter>(rate_limiter: T, min_tasks: u32, max_tasks: u32) -> SyncTaskQueue<T> {
         let mut rng = rand::thread_rng();
-        let mut new_queue = new_empty_queue(rate_limiter);
+        // let mut new_queue = new_empty_queue(rate_limiter);
+        let mut new_queue = new_empty_queue_limitless(None);
         let n_task = rng.gen_range(min_tasks..max_tasks);
         let random_tasks = generate_random_sync_tasks(n_task);
         // let mut q_lock = new_queue.lock().await;
         for t in random_tasks {
-            new_queue.push_back(t).await;
+            new_queue.push_back(t);
         }
         // drop(q_lock);
         return new_queue;
     }
 
-    pub async fn generate_queues_with_web_request_limiter(n: u32) -> Vec<SyncTaskQueue<WebRequestRateLimiter>> {
+    pub async fn generate_queues_with_web_request_limiter(n: u32, min_tasks: u32, max_tasks: u32) -> Vec<SyncTaskQueue<WebRequestRateLimiter>> {
         let queues = join_all((0..n).map(|_| async {
             let mut rng = rand::thread_rng();
             let max_request: i64 = rng.gen_range(30..100);
             let cooldown: i64 = rng.gen_range(1..3);
             let limiter = new_web_request_limiter(max_request, None, Some(cooldown));
-            let q = new_queue_with_random_amount_of_tasks(limiter, 10, 30).await;
+            let q = new_queue_with_random_amount_of_tasks(limiter, min_tasks, max_tasks).await;
             return q;
         })).await;
         return queues;
@@ -427,11 +440,11 @@ mod tests {
         let mut task_queue_lock = task_queue.lock().await;
         
         for t in tasks {
-            task_queue_lock.push_back(t).await;
-            println!("task queue size: {}", task_queue_lock.len().await);
+            task_queue_lock.push_back(t);
+            println!("task queue size: {}", task_queue_lock.len());
         }
 
-        if let Some(t1) = task_queue_lock.front().await {
+        if let Some(t1) = task_queue_lock.front() {
             // let t_lock = t1.lock().await;
             assert_eq!(t1.id(), first_task.id(), "Task id not equal!")
         }
@@ -440,7 +453,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_many_queues_to_manager() {
         let mut manager_queue_map: HashMap<Uuid, (SyncTaskQueue<WebRequestRateLimiter>, u32)> = HashMap::new();
-        generate_queues_with_web_request_limiter(10).await
+        generate_queues_with_web_request_limiter(10, 10, 20).await
             .into_iter()
             .for_each(|q| {
                 manager_queue_map.insert(uuid::Uuid::new_v4(), (q, 10 as u32));
@@ -462,16 +475,18 @@ mod tests {
         // console_subscriber::init();
 
         // FIXME: only works with one queue and no more than 5 tasks.
-        // Find where deadlocks can happen.
-
+        // Find where deadlocks can happen. 
+        let min_task = 90;
+        let max_task = 100;
+        let n_queues = 3;
         let mut manager_queue_map: HashMap<Uuid, (SyncTaskQueue<WebRequestRateLimiter>, u32)> = HashMap::new();
-        generate_queues_with_web_request_limiter(1).await
+        generate_queues_with_web_request_limiter(n_queues, min_task, max_task).await
             .into_iter()
             .for_each(|q| {
                 manager_queue_map.insert(uuid::Uuid::new_v4(), (q, 10 as u32));
                 return ;
             });
-        let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<SyncTask>::new(500)));
+        let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<SyncTask>::new(10000)));
         let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(500)));
         let error_msg_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(500)));
         
@@ -491,19 +506,25 @@ mod tests {
         });
 
         let receive_task = tokio::spawn(async move{
-            
             let channel_clone = task_channel_clone.clone();
+            println!("Before acquiring the mq lock...");
             let mut task_channel_lock = channel_clone.lock().await;
-            while let Ok(Some(task)) = task_channel_lock.receive().await {
-                println!("Received task: {:?}", task);
+            println!("MQ lock acquired...");
+            let mut task_cnt = 0;
+            while let Some(received) = task_channel_lock.receive().await {
+                task_cnt += 1;
+                println!("Received task, count: {:?}", task_cnt);
+                
             }
-            drop(task_channel_lock);
+            // let _ = task_channel_lock.close();
+            println!("Done receiving tasks...");
+            println!("Receiver tries to release the mq lock...");
+            // drop(task_channel_lock);
+            println!("MQ lock released...");
         });
 
         // FIXME: loop will not quit after finishing tasks
-        // let _ = tokio::join!(send_task, receive_task);
-        let _ = tokio::join!(send_task,);
-
-        info!("Created task manager");
+        let _ = tokio::join!(send_task, receive_task);
+        // let _ = tokio::join!(send_task,);
     }
 }

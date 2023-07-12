@@ -226,7 +226,7 @@ impl SyncWorker for WebsocketSyncWorker {
         let mut running = true;
         while running {
             let command = self.worker_msg_channel.write().await.receive().await;
-            if let Ok(Some(command)) = command {
+            if let Some(command) = command {
                 match command {
                     SyncWorkerMessage::StopReceiveData => {
                         running = false;

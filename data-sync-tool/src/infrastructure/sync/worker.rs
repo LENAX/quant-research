@@ -3,7 +3,7 @@
 //!
 
 use std::{collections::HashMap, error::{Error, self}, str::FromStr, sync::Arc, borrow::Borrow, fmt};
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 use async_trait::async_trait;
 use derivative::Derivative;
 use getset::{Getters, Setters};
@@ -170,22 +170,27 @@ pub enum SyncWorkerErrorMessage {
 
 #[derive(Derivative, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
-pub struct WebsocketSyncWorker {
+pub struct WebsocketSyncWorker<MD, MW, ME> {
     state: WorkerState,
     // send data received from remote
-    data_channel: Arc<RwLock<dyn MessageBus<Value> + Sync + Send>>,
+    data_channel: Arc<Mutex<MD>>,
     // send and receive commands from other modules, typically when to stop receiving data
-    worker_msg_channel: Arc<RwLock<dyn MessageBus<SyncWorkerMessage> + Sync + Send>>,
+    worker_msg_channel: Arc<Mutex<MW>>,
     // send error messages
-    error_msg_channel: Arc<RwLock<dyn MessageBus<SyncWorkerErrorMessage> + Sync + Send>>
+    error_msg_channel: Arc<Mutex<ME>>,
 }
 
-impl WebsocketSyncWorker {
+impl<MD, MW, ME> WebsocketSyncWorker<MD, MW, ME> 
+where 
+    MD: MessageBus<Value>,
+    MW: MessageBus<SyncWorkerMessage>,
+    ME: MessageBus<SyncWorkerErrorMessage> + std::marker::Send + std::marker::Sync,
+{
     fn new(
-        data_channel: Arc<RwLock<dyn MessageBus<Value> + Sync + Send>>,
-        worker_msg_channel: Arc<RwLock<dyn MessageBus<SyncWorkerMessage> + Sync + Send>>,
-        error_msg_channel: Arc<RwLock<dyn MessageBus<SyncWorkerErrorMessage>  + Sync + Send>>,
-    ) -> WebsocketSyncWorker {
+        data_channel: Arc<Mutex<MD>>,
+        worker_msg_channel: Arc<Mutex<MW>>,
+        error_msg_channel: Arc<Mutex<ME>>,
+    ) -> WebsocketSyncWorker<MD, MW, ME> {
         return Self {
             state: WorkerState::Sleeping,
             data_channel,
@@ -200,7 +205,12 @@ impl WebsocketSyncWorker {
 /// note that the quote may not be that accurate, so it is not recommended to use it in backtesting
 
 #[async_trait]
-impl SyncWorker for WebsocketSyncWorker {
+impl<MD, MW, ME> SyncWorker for WebsocketSyncWorker<MD, MW, ME> 
+where 
+    MD: MessageBus<Value> + std::marker::Send,
+    MW: MessageBus<SyncWorkerMessage> + std::marker::Send,
+    ME: MessageBus<SyncWorkerErrorMessage> + std::marker::Send + std::marker::Sync,
+{
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>> {
         self.state = WorkerState::Working;
         if *sync_task.spec().request_method() != RequestMethod::Websocket {
@@ -225,7 +235,7 @@ impl SyncWorker for WebsocketSyncWorker {
         // 3. error message handling task
         let mut running = true;
         while running {
-            let command = self.worker_msg_channel.write().await.receive().await;
+            let command = self.worker_msg_channel.lock().await.receive().await;
             if let Some(command) = command {
                 match command {
                     SyncWorkerMessage::StopReceiveData => {
@@ -241,13 +251,13 @@ impl SyncWorker for WebsocketSyncWorker {
                         let parse_result: Result<Value, serde_json::Error> = serde_json::from_str(s.as_str());
                         match parse_result {
                             Ok(value) => {
-                                let data_channel_lock = self.data_channel.read().await;
+                                let data_channel_lock = self.data_channel.lock().await;
                                 let _ = data_channel_lock.send(value).await.expect("send failed");
                                 info!("Successfully send value");
                             },
                             Err(e) => {
                                 error!("Failed to parse text to json value");
-                                let err_channel_lock = self.error_msg_channel.read().await;
+                                let err_channel_lock = self.error_msg_channel.lock().await;
                                 err_channel_lock.send(SyncWorkerErrorMessage::OtherError).await;
                             }
                         }
@@ -256,7 +266,7 @@ impl SyncWorker for WebsocketSyncWorker {
                 },
                 Err(e) => {
                     error!("Failed to read data from socket! error: {}", e);
-                    let err_channel_lock = self.error_msg_channel.read().await;
+                    let err_channel_lock = self.error_msg_channel.lock().await;
                     err_channel_lock.send(SyncWorkerErrorMessage::NoDataReceived).await;
                 }
             }
@@ -272,6 +282,7 @@ mod tests {
     use std::collections::HashMap;
     use log::{info, trace, warn, error};
     use rbatis::error;
+    use uuid::Uuid;
     
     use std::env;
     use env_logger;
@@ -280,6 +291,10 @@ mod tests {
     use log::LevelFilter;
 
     use chrono::Local;
+    use fake::faker::internet::en::SafeEmail;
+    use fake::faker::name::en::Name;
+    use fake::Fake;
+    use rand::Rng;
 
     use crate::{
         domain::synchronization::{
@@ -297,9 +312,48 @@ mod tests {
     use std::io::Cursor;
     use url::Url;
     use std::sync::Arc;
+    use super::*;
 
     fn init_logger() {
         let _ = env_logger::builder().is_test(true).try_init();
+    }
+
+    fn random_string(len: usize) -> String {
+        let mut rng = rand::thread_rng();
+        std::iter::repeat(())
+            .map(|()| rng.sample(rand::distributions::Alphanumeric))
+            .map(char::from)
+            .take(len)
+            .collect()
+    }
+
+    pub fn generate_random_sync_tasks(n: u32) -> Vec<SyncTask> {
+        (0..n).map(|_| {
+            let fake_url = format!("http://{}", SafeEmail().fake::<String>());
+            let request_endpoint = Url::parse(&fake_url).unwrap();
+            let fake_headers: HashMap<String, String> = (0..5).map(|_| (Name().fake::<String>(), random_string(20))).collect();
+            let fake_payload = Some(Arc::new(Value::String(random_string(50))));
+            let fake_method = if rand::random() { RequestMethod::Get } else { RequestMethod::Post };
+            let task_spec = TaskSpecification::new(&fake_url, if fake_method == RequestMethod::Get { "GET" } else { "POST" }, fake_headers, fake_payload).unwrap();
+
+            let start_time = Local::now();
+            let create_time = Local::now();
+            let dataset_name = Some(random_string(10));
+            let datasource_name = Some(random_string(10));
+            SyncTask::new(
+                Uuid::new_v4(),
+                &dataset_name.unwrap(),
+                Uuid::new_v4(),
+                &datasource_name.unwrap(),
+                task_spec,
+                Uuid::new_v4()
+            )
+        }).collect()
+    }
+
+    #[tokio::test]
+    async fn websocket_worker_should_work() {
+        
     }
 
     #[test]

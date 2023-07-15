@@ -3,7 +3,7 @@
 //!
 
 use std::{collections::HashMap, error::{Error, self}, str::FromStr, sync::Arc, borrow::Borrow, fmt};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use async_trait::async_trait;
 use derivative::Derivative;
 use getset::{Getters, Setters};
@@ -158,14 +158,24 @@ impl WebAPISyncWorker {
     }
 }
 
-pub enum SyncWorkerMessage {
-    StopReceiveData,
+#[derive(Debug)]
+pub enum SyncWorkerData {
+    Data(Value),
+    StopCommandReceived
 }
 
+#[derive(Debug)]
+pub enum SyncWorkerMessage {
+    StopReceiveData,
+    DataRecieverStopped
+}
+
+#[derive(Debug)]
 pub enum SyncWorkerErrorMessage {
     NoDataReceived,
+    WebsocketConnectionFailed(String),
     ConnectionDroppedTimeout,
-    OtherError
+    OtherError(String)
 }
 
 #[derive(Derivative, Getters, Setters)]
@@ -173,23 +183,23 @@ pub enum SyncWorkerErrorMessage {
 pub struct WebsocketSyncWorker<MD, MW, ME> {
     state: WorkerState,
     // send data received from remote
-    data_channel: Arc<Mutex<MD>>,
+    data_channel: Arc<RwLock<MD>>,
     // send and receive commands from other modules, typically when to stop receiving data
-    worker_msg_channel: Arc<Mutex<MW>>,
+    worker_msg_channel: Arc<RwLock<MW>>,
     // send error messages
-    error_msg_channel: Arc<Mutex<ME>>,
+    error_msg_channel: Arc<RwLock<ME>>,
 }
 
 impl<MD, MW, ME> WebsocketSyncWorker<MD, MW, ME> 
 where 
-    MD: MessageBus<Value>,
-    MW: MessageBus<SyncWorkerMessage>,
+    MD: MessageBus<SyncWorkerData> + std::marker::Send,
+    MW: MessageBus<SyncWorkerMessage> + std::marker::Send,
     ME: MessageBus<SyncWorkerErrorMessage> + std::marker::Send + std::marker::Sync,
 {
     fn new(
-        data_channel: Arc<Mutex<MD>>,
-        worker_msg_channel: Arc<Mutex<MW>>,
-        error_msg_channel: Arc<Mutex<ME>>,
+        data_channel: Arc<RwLock<MD>>,
+        worker_msg_channel: Arc<RwLock<MW>>,
+        error_msg_channel: Arc<RwLock<ME>>,
     ) -> WebsocketSyncWorker<MD, MW, ME> {
         return Self {
             state: WorkerState::Sleeping,
@@ -197,6 +207,17 @@ where
             worker_msg_channel,
             error_msg_channel
         };
+    }
+
+    async fn close_all_channels(&self) {
+        let mut dc_lock = self.data_channel.write().await;
+        dc_lock.close().await;
+
+        let mut wm_lock = self.worker_msg_channel.write().await;
+        wm_lock.close().await;
+
+        let mut err_msg_lock = self.error_msg_channel.write().await;
+        err_msg_lock.close().await;
     }
 }
 
@@ -207,8 +228,8 @@ where
 #[async_trait]
 impl<MD, MW, ME> SyncWorker for WebsocketSyncWorker<MD, MW, ME> 
 where 
-    MD: MessageBus<Value> + std::marker::Send,
-    MW: MessageBus<SyncWorkerMessage> + std::marker::Send,
+    MD: MessageBus<SyncWorkerData> + std::marker::Send + std::marker::Sync,
+    MW: MessageBus<SyncWorkerMessage> + std::marker::Send + std::marker::Sync,
     ME: MessageBus<SyncWorkerErrorMessage> + std::marker::Send + std::marker::Sync,
 {
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>> {
@@ -218,62 +239,95 @@ where
             return Err(Box::new(RequestMethodNotSupported));
         }
         let request_url = sync_task.spec().request_endpoint();
-        let (mut socket, _) =
-            connect(request_url).expect("Failed to connect");
-        let msg_body = sync_task.spec().payload();
-        if let Some(body) = msg_body {
-            let text_msg = body.to_string();
-            socket.write_message(Message::Text(text_msg)).expect("Failed to send message!");
-        }
-
-        // When should receive end?
-        // Now we naively assume that worker should stop when no data is received.
-        // TODO: Support various types of closing strategy
-        // The rough idea is to have these async tasks working concurrently:
-        // 1. data receiving and sending task
-        // 2. worker message handling task
-        // 3. error message handling task
-        let mut running = true;
-        while running {
-            let command = self.worker_msg_channel.lock().await.receive().await;
-            if let Some(command) = command {
-                match command {
-                    SyncWorkerMessage::StopReceiveData => {
-                        running = false;
-                    }
+        let connect_result = connect(request_url);
+        match connect_result {
+            Err(e) => {
+                println!("Connection failed!");
+                let err_channel = self.error_msg_channel.read().await;
+                let _ = err_channel.send(SyncWorkerErrorMessage::WebsocketConnectionFailed(e.to_string())).await;
+                drop(err_channel);
+                self.close_all_channels().await;
+                return Err(Box::new(e));
+            },
+            Ok((mut socket, _)) => {
+                let msg_body = sync_task.spec().payload();
+                if let Some(body) = msg_body {
+                    let text_msg = body.to_string();
+                    socket.write_message(Message::Text(text_msg)).expect("Failed to send message!");
+                    println!("Message sent!");
                 }
-            }
-            let result = socket.read_message();
-            match result {
-                Ok(msg) => {
-                    if let Message::Text(s) = msg {
-                        info!("Received text response: {}",s);
-                        let parse_result: Result<Value, serde_json::Error> = serde_json::from_str(s.as_str());
-                        match parse_result {
-                            Ok(value) => {
-                                let data_channel_lock = self.data_channel.lock().await;
-                                let _ = data_channel_lock.send(value).await.expect("send failed");
-                                info!("Successfully send value");
+
+                // When should receive end?
+                // Now we naively assume that worker should stop when no data is received.
+                // TODO: Support various types of closing strategy
+                // The rough idea is to have these async tasks working concurrently:
+                // 1. data receiving and sending task
+                // 2. worker message handling task
+                // 3. error message handling task
+                let mut running = true;
+                while running {
+                    let mut work_mq_lock = self.worker_msg_channel.write().await;
+                    let command = work_mq_lock.receive().await;
+                    println!("Worker acquired work mq lock! Command: {:?}", command);
+                    println!("Receiving command: {:?}", command);
+                    if let Some(command) = command {
+                        match command {
+                            SyncWorkerMessage::StopReceiveData => {
+                                running = false;
+                                let _ = work_mq_lock.send(SyncWorkerMessage::DataRecieverStopped).await;
+                                drop(work_mq_lock);
+                                let data_channel_lock = self.data_channel.read().await;
+                                let _ = data_channel_lock.send(SyncWorkerData::StopCommandReceived).await.expect("send failed");
+                                drop(data_channel_lock);
+                                info!("Sent stop receive command to receiver!");
+                                println!("Worker released work mq lock! Stopped receiving data.")
                             },
-                            Err(e) => {
-                                error!("Failed to parse text to json value");
-                                let err_channel_lock = self.error_msg_channel.lock().await;
-                                err_channel_lock.send(SyncWorkerErrorMessage::OtherError).await;
+                            data_reciever_stopped => {
+                                println!("Why send me back this message? {:?}", data_reciever_stopped);
                             }
                         }
                     }
-                    
-                },
-                Err(e) => {
-                    error!("Failed to read data from socket! error: {}", e);
-                    let err_channel_lock = self.error_msg_channel.lock().await;
-                    err_channel_lock.send(SyncWorkerErrorMessage::NoDataReceived).await;
+                    let result = socket.read_message();
+                    match result {
+                        Ok(msg) => {
+                            // println!("Received msg from remote: {:?}", msg);
+                            if let Message::Text(s) = msg {
+                                // println!("Received text response: {}",s);
+                                // serde_json::
+                                let parse_result: Result<Value, serde_json::Error> = serde_json::from_str(&s);
+                                match parse_result {
+                                    Ok(value) => {
+                                        let data_channel_lock = self.data_channel.read().await;
+                                        let _ = data_channel_lock.send(SyncWorkerData::Data(value)).await.expect("send failed");
+                                        drop(data_channel_lock);
+                                        info!("Successfully send value");
+                                    },
+                                    Err(e) => {
+                                        error!("Failed to parse text to json value");
+                                        let err_channel_lock = self.error_msg_channel.read().await;
+                                        let _ = err_channel_lock.send(SyncWorkerErrorMessage::OtherError(e.to_string())).await;
+                                        drop(err_channel_lock);
+                                    }
+                                }
+                            }
+                            
+                        },
+                        Err(e) => {
+                            error!("Failed to read data from socket! error: {}", e);
+                            let err_channel_lock = self.error_msg_channel.read().await;
+                            let _ = err_channel_lock.send(SyncWorkerErrorMessage::NoDataReceived).await;
+                            drop(err_channel_lock);
+                        }
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
+
+                println!("Worker finished... Closing channels...");
+                self.close_all_channels().await;
+                let _ = socket.close(None);
+                Ok(())
             }
-
         }
-
-        Ok(())
     }
 }
 
@@ -301,9 +355,11 @@ mod tests {
             sync_task::SyncTask,
             value_objects::task_spec::{RequestMethod, TaskSpecification},
         },
-        infrastructure::sync::worker::{
+        infrastructure::{sync::worker::{
             build_headers, build_request, SyncWorker, WebAPISyncWorker,
         },
+        mq::tokio_channel_mq::TokioMpscMessageBus,
+        mq::message_bus::MessageBus,},
     };
     use serde_json::json;
     use serde_json::Value;
@@ -313,6 +369,17 @@ mod tests {
     use url::Url;
     use std::sync::Arc;
     use super::*;
+
+    #[test]
+    fn serde_json_should_work() {
+        let data = r#"
+        {"300841": {"name": "康华生物", "open": 59.8, "close": 59.82, "now": 58.85, "high": 60.16, "low": 58.02, "buy": 58.84, "sell": 58.85, "turnover": 2136462, "volume": 126397370.69, "bid1_volume": 1800, "bid1": 58.84, "bid2_volume": 100, "bid2": 58.77, "bid3_volume": 730, "bid3": 58.76, "bid4_volume": 2400, "bid4": 58.75, "bid5_volume": 600, "bid5": 58.74, "ask1_volume": 3175, "ask1": 58.85, "ask2_volume": 1325, "ask2": 58.86, "ask3_volume": 1800, "ask3": 58.88, "ask4_volume": 625, "ask4": 58.92, "ask5_volume": 400, "ask5": 58.93, "date": "2023-07-14", "time": "15:35:00"}}
+        "#;
+        let v: Value = serde_json::from_str(data).expect("Parse failed");
+
+        // Access parts of the data by indexing with square brackets.
+        println!("Please call {} at the number {}", v["300841"], v["300841"]["name"]);
+    }
 
     fn init_logger() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -353,7 +420,124 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_worker_should_work() {
+        let data_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncWorkerData>::new(100)));
+        let error_message_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncWorkerErrorMessage>::new(100)));
+        let worker_message_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncWorkerMessage>::new(1000)));
+        let wm_channel = worker_message_channel.clone();
+        let wm_channel_clone = worker_message_channel.clone();
+        let dc = data_channel.clone();
+        let ec1 = error_message_channel.clone();
+        let ec2 = error_message_channel.clone();
+        // let ec3 = error_message_channel.clone();
+
+        let mut test_worker = WebsocketSyncWorker::new(
+            data_channel, worker_message_channel, error_message_channel);
+        let mut test_task = SyncTask::default();
+        let spec = TaskSpecification::new(
+            "ws://localhost:8000/ws",
+            "websocket",
+            HashMap::new(),
+            None,
+        ).expect("Unrecognized request method");
         
+        let stop_time = chrono::Local::now() + chrono::Duration::seconds(5);
+        test_task.set_spec(spec);
+        println!("updated task: {:?}", test_task);
+
+        let handle_task = tokio::spawn(async move {
+            let _ = test_worker.handle(&mut test_task).await;
+        });
+        
+        let stop_receive_watcher_task = tokio::spawn(async move {
+            loop {
+                let now = chrono::Local::now();
+                println!("The time is {:?}", now);
+
+                if now >= stop_time {
+                    println!("Trying to stop worker");
+                    let wm_channel_lock = wm_channel.read().await;
+                    println!("Acquired worker message lock in stop_receive_watcher_task!");
+                    let result = wm_channel_lock.send(SyncWorkerMessage::StopReceiveData).await;
+                    drop(wm_channel_lock);
+                    if let Err(e) = result {
+                        println!("Error occurred while trying to send command: {:?}", e);
+                    }
+                    
+                    // Hey! Huge mistake here! You should not receive your own data without releasing the lock!
+                    // Should acquire the lock again!
+                    let mut wm_channel_lock = wm_channel.write().await;
+
+                    // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    let response = wm_channel_lock.receive().await;
+                    drop(wm_channel_lock);
+                    if let Some(msg) = response {
+                        if let SyncWorkerMessage::DataRecieverStopped = msg {
+                            println!("Instructed worker to stop. Exit.");
+                            break;
+                        }
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            }
+        });
+
+        let receiver_task = tokio::spawn(async move {
+            loop {
+                let mut ec_lock = ec1.write().await;
+                let err = ec_lock.receive().await;
+                drop(ec_lock);
+
+                if let Some(e) = err {
+                    println!("Worker failed! Error: {:?}", e);
+                    println!("receiver_task exited.");
+                    break;
+                }
+                
+                let mut data_channel_lock = dc.write().await;
+                let message = data_channel_lock.receive().await;
+                drop(data_channel_lock);
+                match message {
+                    Some(msg) => {
+                        match msg {
+                            SyncWorkerData::Data(d) => {
+                                println!("Received: {:?} in receiver_task", d);
+                            },
+                            SyncWorkerData::StopCommandReceived => {
+                                println!("Worker has stopped. Receiver exit.");
+                                break;
+                            }
+                        }
+                    },
+                    None => { println!("No data received."); }
+                }
+                println!("receiver going to sleep for 100ms...");
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            }
+        });
+
+        let err_handle_task = tokio::spawn(async move {
+            loop {
+                let mut ec_lock = ec2.write().await;
+                let err = ec_lock.receive().await;
+                drop(ec_lock);
+
+                if let Some(e) = err {
+                    println!("Worker failed! Error: {:?}", e);
+                    println!("err_handle_task exited.");
+                    break;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+        });
+
+        let _ = tokio::join!(
+            handle_task, stop_receive_watcher_task, receiver_task
+        );
+        // let _ = tokio::join!(
+        //     handle_task, stop_receive_watcher_task
+        // );
+        println!("Websocket test done!");
     }
 
     #[test]
@@ -442,4 +626,5 @@ mod tests {
 
         println!("updated task: {:?}", test_task);
     }
+
 }

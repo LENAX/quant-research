@@ -25,27 +25,32 @@ impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> 
     /// TODO: Error Handling
     /// TODO: Graceful shutdown
     async fn send(&self, message: T) -> Result<(), Box<dyn Error + Send + Sync>> {
+        println!("Sending message: {:?}", message);
         self.sender.send(message).await?;
+        // self.sender.try_send(message)?;
         Ok(())
     }
 
     async fn receive(&mut self) -> Option<T> {
-        // let received_value = self.receiver.recv().await.ok_or("Failed to receive message")?;
+        // let received_value = self.receiver.recv().await;
+
+        // return received_value;
         let received_value = self.receiver.try_recv();
         match received_value {
             Ok(value) => {
+                println!("Received value: {:?}", value);
                 Some(value)
             },
-            TryRecvError => {
+            try_recv_error => {
+                println!("When trying to receive data, error occurred: {:?}", try_recv_error);
                 None
             }
         }
-        
     }
 
     async fn close(&mut self) {
         self.receiver.close();
-        self.sender.closed().await;
+        self.sender.closed().await;   
     }
 }
 

@@ -32,3 +32,8 @@ data-sync-tool/.vs/**
 *.db
 **/*.db
 market_quote/*.db
+__pycache__/
+*.py[cod]
+*$py.class
+fake-market-feed/__pycache__/**
+fake-market-feed/__pycache__/app.cpython-310.pyc

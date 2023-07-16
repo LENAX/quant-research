@@ -44,6 +44,12 @@ pub trait SyncWorker: Send + Sync {
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>>;
 }
 
+/// A marker trait that marks a long running worker
+pub trait LongRunningWorker {}
+
+/// A market trait for workers handling short tasks
+pub trait ShortTaskHandlingWorker {}
+
 fn build_headers(header_map: &HashMap<String, String>) -> HeaderMap {
     let header: HeaderMap = header_map
         .iter()
@@ -95,6 +101,10 @@ fn build_request(
     }
 }
 
+pub fn create_long_running_workers<W: SyncWorker + LongRunningWorker>(n: u32) -> Vec<W> {
+    
+}
+
 #[derive(Derivative)]
 #[derivative(Default(bound = ""))]
 pub enum WorkerState {
@@ -109,6 +119,9 @@ pub struct WebAPISyncWorker {
     state: WorkerState,
     http_client: Client,
 }
+
+/// WebAPISyncWorker is a ShortTaskHandlingWorker
+impl ShortTaskHandlingWorker for WebAPISyncWorker {}
 
 #[async_trait]
 impl SyncWorker for WebAPISyncWorker {
@@ -190,11 +203,19 @@ pub struct WebsocketSyncWorker<MD, MW, ME> {
     error_msg_channel: Arc<RwLock<ME>>,
 }
 
+/// WebsocketSyncWorker is a long running work
+impl<MD, MW, ME> LongRunningWorker for WebsocketSyncWorker<MD, MW, ME>
+where 
+    MD: MessageBus<SyncWorkerData> + std::marker::Send,
+    MW: MessageBus<SyncWorkerMessage> + std::marker::Send,
+    ME: MessageBus<SyncWorkerErrorMessage> + std::marker::Send + std::marker::Sync
+{}
+
 impl<MD, MW, ME> WebsocketSyncWorker<MD, MW, ME> 
 where 
     MD: MessageBus<SyncWorkerData> + std::marker::Send,
     MW: MessageBus<SyncWorkerMessage> + std::marker::Send,
-    ME: MessageBus<SyncWorkerErrorMessage> + std::marker::Send + std::marker::Sync,
+    ME: MessageBus<SyncWorkerErrorMessage> + std::marker::Send + std::marker::Sync
 {
     fn new(
         data_channel: Arc<RwLock<MD>>,
@@ -234,6 +255,7 @@ where
 {
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>> {
         self.state = WorkerState::Working;
+        sync_task.start();
         if *sync_task.spec().request_method() != RequestMethod::Websocket {
             self.state = WorkerState::Sleeping;
             return Err(Box::new(RequestMethodNotSupported));
@@ -243,6 +265,7 @@ where
         match connect_result {
             Err(e) => {
                 println!("Connection failed!");
+                sync_task.failed();
                 let err_channel = self.error_msg_channel.read().await;
                 let _ = err_channel.send(SyncWorkerErrorMessage::WebsocketConnectionFailed(e.to_string())).await;
                 drop(err_channel);
@@ -279,6 +302,7 @@ where
                                 let data_channel_lock = self.data_channel.read().await;
                                 let _ = data_channel_lock.send(SyncWorkerData::StopCommandReceived).await.expect("send failed");
                                 drop(data_channel_lock);
+                                sync_task.finished();
                                 info!("Sent stop receive command to receiver!");
                                 println!("Worker released work mq lock! Stopped receiving data.")
                             },
@@ -335,7 +359,6 @@ where
 mod tests {
     use std::collections::HashMap;
     use log::{info, trace, warn, error};
-    use rbatis::error;
     use uuid::Uuid;
     
     use std::env;
@@ -420,6 +443,8 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_worker_should_work() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        warn!("!!");
         let data_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncWorkerData>::new(100)));
         let error_message_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncWorkerErrorMessage>::new(100)));
         let worker_message_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncWorkerMessage>::new(1000)));

@@ -3,7 +3,7 @@
 
 use chrono::prelude::*;
 // use fake::{ Fake};
-use super::{value_objects::task_spec::TaskSpecification, sync_plan::CreateTaskRequest};
+use super::{value_objects::task_spec::{TaskSpecification, RequestMethod}, sync_plan::CreateTaskRequest};
 use derivative::Derivative;
 use getset::{Getters, Setters};
 use uuid::Uuid;
@@ -68,6 +68,20 @@ impl SyncTask {
                 .set_spec(task_spec)
                 .set_create_time(Local::now());
         return new_task;
+    }
+
+    pub fn is_long_running(&self) -> bool {
+        match self.spec().request_method() {
+            RequestMethod::Get => {
+                false
+            }, 
+            RequestMethod::Post =>{
+                false
+            },
+            RequestMethod::Websocket => {
+                true
+            }
+        }
     }
 
     /// Set task to pending status, waiting to be executed

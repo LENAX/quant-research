@@ -1,24 +1,26 @@
 use std::error::Error;
 
 use async_trait::async_trait;
-use futures::channel::mpsc::TryRecvError;
 use tokio::sync::mpsc;
 use core::fmt::Debug;
 
 use super::message_bus::MessageBus;
 
+/// A Message Bus implemented by Tokio Mpsc Channel
 pub struct TokioMpscMessageBus<T: Send + Sync + 'static + Debug> {
     sender: mpsc::Sender<T>,
     receiver: mpsc::Receiver<T>,
 }
 
-
+/// FIXME: sharing single receiver and sender may cause a lot of lock contentions
+/// Please separate senders and receivers.
 impl<T: Debug + Send + Sync + 'static> TokioMpscMessageBus<T> {
     pub fn new(size: usize) -> Self {
         let (sender, receiver) = mpsc::channel(size);
         Self { sender, receiver }
     }
 }
+
 
 #[async_trait]
 impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> {
@@ -57,13 +59,9 @@ impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::future::{join_all, join};
-    use tokio::runtime::Runtime;
+    use futures::future::join_all;
     use tokio::sync::Mutex;
-    use std::fmt::Debug;
-    use std::error::Error;
     use std::sync::Arc;
-    use async_trait::async_trait;
 
     #[tokio::test]
     async fn test_send_receive() {

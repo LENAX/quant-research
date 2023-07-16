@@ -14,8 +14,8 @@ app = FastAPI()
 loop = asyncio.get_running_loop()
 
 def get_quote_blocking() -> dict:
-    # return quotation.real('300841')
-    return quotation.market_snapshot()
+    return quotation.real('300841')
+    # return quotation.market_snapshot()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

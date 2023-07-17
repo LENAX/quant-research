@@ -182,7 +182,7 @@ where
     T: RateLimiter,
     MT: MessageBusSender<SyncTask> + MpscMessageBus,
     ME: MessageBusSender<TaskManagerError> + MpscMessageBus,
-    MF: MessageBusReceiver<(DatasetId, SyncTask)> + SpmcMessageBus,
+    MF: MessageBusReceiver<(DatasetId, SyncTask)> + SpmcMessageBus<T>,
 {
     queues: Arc<Mutex<HashMap<DatasetId, (SyncTaskQueue<T>, MaxRetry)>>>,
     task_channel: Arc<Mutex<MT>>,

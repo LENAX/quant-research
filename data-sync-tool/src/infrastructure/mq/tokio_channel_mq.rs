@@ -1,10 +1,10 @@
 use std::error::Error;
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, broadcast};
 use core::fmt::Debug;
 
-use super::message_bus::MessageBus;
+use super::message_bus::{MessageBus, MessageBusReceiver, MessageBusError, MessageBusSender};
 
 /// A Message Bus implemented by Tokio Mpsc Channel
 pub struct TokioMpscMessageBus<T: Send + Sync + 'static + Debug> {
@@ -21,6 +21,14 @@ impl<T: Debug + Send + Sync + 'static> TokioMpscMessageBus<T> {
     }
 }
 
+
+pub fn create_tokio_mpsc_channel<T>(n: usize) -> (TokioMpscMessageBusSender<T>, TokioMpscMessageBusReceiver<T>){
+    let (tx, mut rx) = mpsc::channel::<T>(100);
+    let sender = TokioMpscMessageBusSender{ sender: tx };
+    let receiver = TokioMpscMessageBusReceiver { receiver: rx };
+
+    return (sender, receiver)
+}
 
 #[async_trait]
 impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> {
@@ -55,6 +63,136 @@ impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> 
         self.sender.closed().await;   
     }
 }
+
+#[derive(Clone, Debug)]
+pub struct TokioMpscMessageBusReceiver<T> {
+    receiver: mpsc::Receiver<T>,
+}
+
+#[async_trait]
+impl<T> MessageBusReceiver<T> for TokioMpscMessageBusReceiver<T> {
+    async fn receive(&mut self) -> Option<T> {
+        let data = self.receiver.receive().await;
+        return data;
+    }
+
+    fn try_recv(&mut self) -> Result<T, MessageBusError<T>> {
+        let data = self.receiver.try_recv();
+
+        match data {
+            Ok(d) => {
+                Ok(d)
+            },
+            Err(e) => {
+                MessageBusError::ReceiveFailed(e.to_string())
+            }
+        }
+    }
+
+    fn close(&mut self) {
+        self.receiver.close();
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TokioMpscMessageBusSender<T> {
+    sender: mpsc::Sender<T>,
+}
+
+#[async_trait]
+impl<T> MessageBusSender<T> for TokioMpscMessageBusSender<T> {
+    async fn send(&self, message: T) -> Result<(), MessageBusError<T>> {
+        let result = self.sender.send(message).await;
+        if let Err(e) = result {
+            return MessageBusError::SendFailed(e.into())
+        }
+        Ok(())
+    }
+
+    fn try_send(&self, message: T) -> Result<(), MessageBusError<T>> {
+        let result = self.sender.try_send(message);
+        if let Err(e) = result {
+            return MessageBusError::SendFailed(e.into())
+        }
+        Ok(())
+    }
+
+    async fn close(&self) {
+        self.sender.closed().await;
+    }
+
+    fn is_closed(&self) -> bool {
+        self.sender.is_closed()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TokioSpmcMessageBusSender<T> {
+    sender: broadcast::Sender<T>,
+}
+
+
+#[async_trait]
+impl<T> MessageBusSender<T> for TokioSpmcMessageBusSender<T> {
+    async fn send(&self, message: T) -> Result<(), MessageBusError<T>> {
+        let result = self.sender.send(message);
+        if let Err(e) = result {
+            return MessageBusError::SendFailed(e.into())
+        }
+        Ok(())
+    }
+
+    fn try_send(&self, message: T) -> Result<(), MessageBusError<T>> {
+        let result = self.sender.try_send(message);
+        if let Err(e) = result {
+            return MessageBusError::SendFailed(e.into())
+        }
+        Ok(())
+    }
+    
+    async fn close(&self) {
+        self.sender.closed().await;
+    }
+    
+    fn is_closed(&self) -> bool {
+        self.sender.is_closed()
+    }
+    
+}
+
+#[derive(Clone, Debug)]
+pub struct TokioSpmcMessageBusReceiver<T> {
+    // use broadcast channel to leverage its buffering ability
+    receiver: broadcast::Receiver<T>,
+}
+
+#[async_trait]
+impl<T> MessageBusReceiver<T> for TokioSpmcMessageBusReceiver<T> {
+    async fn receive(&mut self) -> Option<T> {
+        let data = self.receiver.receive().await;
+        return data;
+    }
+    
+    fn try_recv(&mut self) -> Result<T, MessageBusError<T>> {
+        let data = self.receiver.try_recv();
+
+        match data {
+            Ok(d) => {
+                Ok(d)
+            },
+            Err(e) => {
+                MessageBusError::ReceiveFailed(e.to_string())
+            }
+        }
+    }
+    
+    fn close(&mut self) {
+        self.receiver.close();
+    }
+}
+
+
+
 
 #[cfg(test)]
 mod tests {

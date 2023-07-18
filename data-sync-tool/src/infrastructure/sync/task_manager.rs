@@ -14,6 +14,7 @@ use derivative::Derivative;
 use futures::future::join_all;
 use getset::{Getters, Setters};
 
+use rbatis::dark_std::sync::vec;
 use tokio::{join, sync::{Mutex, RwLock}, task::JoinHandle};
 use uuid::Uuid;
 
@@ -43,6 +44,7 @@ pub enum SyncTaskQueueValue {
 #[derive(Derivative, Getters, Setters, Debug)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncTaskQueue<T: RateLimiter> {
+    id: Uuid,
     tasks: VecDeque<SyncTask>,
     rate_limiter: Option<T>,
 }
@@ -52,11 +54,13 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
         let task_queue = VecDeque::from(tasks);
         if let Some(rate_limiter) = rate_limiter {
             SyncTaskQueue {
+                id: Uuid::new_v4(),
                 tasks: task_queue,
                 rate_limiter: Some(rate_limiter),
             }
         } else {
             SyncTaskQueue {
+                id: Uuid::new_v4(),
                 tasks: task_queue,
                 rate_limiter: None,
             }
@@ -151,6 +155,7 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
 pub enum TaskManagerError {
     RateLimited(Option<CooldownTimerTask>, TimeSecondLeft), // timer task, seco
     DailyLimitExceeded,
+    RateLimiterInitializationError(TimerError),
     OtherError(String)
 }
 
@@ -185,23 +190,23 @@ where
     MF: MessageBusReceiver<(DatasetId, SyncTask)> + SpmcMessageBus<T>,
 {
     queues: Arc<Mutex<HashMap<DatasetId, (SyncTaskQueue<T>, MaxRetry)>>>,
-    task_channel: Arc<Mutex<MT>>,
-    error_message_channel: Arc<Mutex<ME>>,
-    failed_task_channel: Arc<Mutex<MF>>,
+    task_channel: MT,
+    error_message_channel: ME,
+    failed_task_channel: MF,
 }
 
 impl<T, MT, ME, MF> TaskManager<T, MT, ME, MF>
 where
-    T: RateLimiter + 'static,
-    MT: MessageBus<SyncTask>,
-    ME: MessageBus<TaskManagerError>,
-    MF: MessageBus<(DatasetId, SyncTask)> + std::marker::Send + 'static + std::marker::Sync,
+    T: RateLimiter,
+    MT: MessageBusSender<SyncTask> + MpscMessageBus,
+    ME: MessageBusSender<TaskManagerError> + MpscMessageBus,
+    MF: MessageBusReceiver<(DatasetId, SyncTask)> + SpmcMessageBus<T>,
 {
     pub fn new(
         task_queues: HashMap<DatasetId, (SyncTaskQueue<T>, MaxRetry)>,
-        task_channel: Arc<Mutex<MT>>,
-        error_message_channel: Arc<Mutex<ME>>,
-        failed_task_channel: Arc<Mutex<MF>>,
+        task_channel: MT,
+        error_message_channel: ME,
+        failed_task_channel: MF,
     ) -> TaskManager<T, MT, ME, MF> {
         Self {
             queues: Arc::new(Mutex::new(task_queues)),
@@ -249,32 +254,25 @@ where
 #[async_trait]
 impl<T, MT, ME, MF> SyncTaskManager for TaskManager<T, MT, ME, MF>
 where
-    T: RateLimiter + 'static,
-    MT: MessageBus<SyncTask> + std::marker::Send + std::marker::Sync,
-    ME: MessageBus<TaskManagerError> + std::marker::Send + std::marker::Sync,
-    MF: MessageBus<(DatasetId, SyncTask)> + std::marker::Send + 'static + std::marker::Sync,
- {
+    T: RateLimiter,
+    MT: MessageBusSender<SyncTask> + MpscMessageBus + std::marker::Sync + Clone + std::marker::Send,
+    ME: MessageBusSender<TaskManagerError> + MpscMessageBus + std::marker::Sync + Clone + std::marker::Send,
+    MF: MessageBusReceiver<(DatasetId, SyncTask)> + SpmcMessageBus<T> + std::marker::Sync + std::marker::Send,
+{
     async fn stop(&self) {
-        let mut task_channel_lock = self.task_channel.lock().await;
-        let mut error_message_channel_lock = self.error_message_channel.lock().await;
-        let mut failed_task_channel = self.failed_task_channel.lock().await;
-
-        join!(
-            task_channel_lock.close(),
-            error_message_channel_lock.close(),
-            failed_task_channel.close()
-        );
+        self.task_channel.close();
+        self.error_message_channel.close();
+        self.failed_task_channel.close();
     }
 
     /// start task manager and push tasks to its consumers
     /// Task manager will poll its queues and try to get a task from each of them, and then send the task to task channel
     async fn start(&mut self) -> Result<(), TaskManagerError> {
         let queues = self.queues.clone();
-        let failed_task_channel = Arc::clone(&self.failed_task_channel);
+        // let failed_task_channel = Arc::clone(&self.failed_task_channel);
         let handle_failures = tokio::spawn(async move {
             while let Some((dataset_id, failed_task)) =
-                failed_task_channel.lock().await.receive().await
-            {
+                self.failed_task_channel.receive().await {
                 if let Some((queue, retries_left)) = queues.lock().await.get_mut(&dataset_id) {
                     if *retries_left > 0 {
                         queue.push_back(failed_task);
@@ -284,78 +282,72 @@ where
             }
         });
 
-        loop {
-            let queue_empty = self.all_queues_are_empty().await;
-            println!("queues are empty: {}", queue_empty);
-            if queue_empty {
-                println!("All task queues are empty. Exit.");
-                // Should I close all channels after exiting? Probably I should.
-                self.stop().await;
-                break;
-            }
-            let mut any_task_found = false;
-            println!("Before entering queue selection loop...");
-            for (dataset_id, (task_queue, _)) in &mut self.queues.lock().await.iter_mut() {
-                // Check whether all queues are empty
-                // break the loop if all queues are empty
-                println!("Acquired queues lock...");
-                
-                // let mut q_lock = task_queue.lock().await;
-                let task_value = task_queue.pop_front().await;
-                println!("Fetched task!");
-                // drop();
-                // pull tasks from queues and send it to consumers
-                match task_value {
-                    Ok(value) => {
-                        match value {
-                            SyncTaskQueueValue::Task(t) => {
-                                if let Some(t) = t {
-                                    // Send the task to its consumer
-                                    println!("Task manager tries to acquire the mq lock...");
-                                    let task_channel_lock = self.task_channel.lock().await;
-                                    println!("Task manager acquired the mq lock...");
-                                    let _ = task_channel_lock.send(t).await;
-                                    // drop(task_channel_lock);
-                                    println!("Task manager released the mq lock...");
-                                    any_task_found = true;
-                                } else {
-                                    println!("Received no task from queue {}!", dataset_id);
+        let mut queue_fetching_tasks: Vec<JoinHandle<()>> = vec![];
+        
+        // To leverage the power of mpsc channel, we can send tasks asynchronously
+        for (dataset_id, (task_queue, _)) in &mut self.queues.lock().await.iter_mut() {
+            // Check whether all queues are empty
+            // break the loop if all queues are empty
+            println!("Acquired queues lock...");
+            let queue = Arc::new(task_queue);
+            let new_task_sender_channel = self.task_channel.clone();
+            let new_error_sender_channel = self.error_message_channel.clone();
+
+            // spawn a new async task for each queue
+            let queue_fetching_task = tokio::spawn(async move {
+                let q_is_empty = queue.is_empty();
+                let no_task_found = false;
+                while !q_is_empty {
+                    if no_task_found {
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    }
+
+                    let task_value = queue.pop_front().await;
+                    match task_value {
+                        Ok(value) => {
+                            match value {
+                                SyncTaskQueueValue::Task(t) => {
+                                    if let Some(t) = t {
+                                        // Send the task to its consumer
+                                        let r = new_task_sender_channel.send(t).await;
+                                        println!("Sent task {:?} in queue {}", t.id(), queue.id());
+                                        no_task_found = false;
+                                    } else {
+                                        println!("Received no task from queue {}!", queue.id());
+                                    }
+                                },
+                                SyncTaskQueueValue::RateLimited(cooldown_task, time_left) => {
+                                    println!("Error! Rate limited! time left: {}", time_left);
+                                    let _ = new_error_sender_channel
+                                        .send(TaskManagerError::RateLimited(cooldown_task, time_left))
+                                        .await;
+                                },
+                                SyncTaskQueueValue::DailyLimitExceeded => {
+                                    // tell task manager's consumers that daily limit is triggered
+                                    // TODO: figure out what to do with it? Does task manager just tell others this error or do something further?
+                                    println!("Error! DailyLimitExceeded!");
+                                    let _ = new_error_sender_channel
+                                        .send(TaskManagerError::DailyLimitExceeded)
+                                        .await;
                                 }
-                            },
-                            SyncTaskQueueValue::RateLimited(cooldown_task, time_left) => {
-                                let error_message_channel_lock = self.error_message_channel.lock().await;
-                                println!("Error! Rate limited!");
-                                let _ = error_message_channel_lock
-                                    .send(TaskManagerError::RateLimited(cooldown_task, time_left))
-                                    .await;
-                            },
-                            SyncTaskQueueValue::DailyLimitExceeded => {
-                                // tell task manager's consumers that daily limit is triggered
-                                // TODO: figure out what to do with it? Does task manager just tell others this error or do something further?
-                                let error_message_channel_lock = self.error_message_channel.lock().await;
-                                println!("Error! DailyLimitExceeded!");
-                                let _ = error_message_channel_lock
-                                    .send(TaskManagerError::DailyLimitExceeded)
-                                    .await;
                             }
+                        },
+                        Err(e) => {
+                            self.error_message_channel.send(TaskManagerError::RateLimiterInitializationError(e));
                         }
-                    },
-                    Err(e) => {
-                        return Err(TaskManagerError::OtherError(e.to_string()));
                     }
                 }
-
-                println!("Queue selection finished...");
-                // TODO: handle failed tasks, push them back to queue
-
-                if !any_task_found {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                }
-            }
+                println!("Queue {} has no task left. Quitting...", queue.id());
+            });
+            queue_fetching_tasks.push(queue_fetching_task);
         }
         
-        println!("Waiting for failure handling tasks.");
-        let _ = handle_failures.await;
+        println!("Waiting for all tasks to complete.");
+        join!(
+            join_all(queue_fetching_tasks),
+            handle_failures
+        );
+        
         println!("Done!");
         Ok(())
     }
@@ -368,7 +360,7 @@ mod tests {
         domain::synchronization::rate_limiter::{RateLimitStatus, RateLimiter},
         infrastructure::{
             sync::sync_rate_limiter::WebRequestRateLimiter,
-            mq::tokio_channel_mq::TokioMpscMessageBus},
+            mq::tokio_channel_mq::{TokioMpscMessageBus, create_tokio_mpsc_channel, create_tokio_spmc_channel}},
     };
     use log::{info, error};
 
@@ -505,33 +497,11 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_add_many_queues_to_manager() {
-        init();
-        let mut manager_queue_map: HashMap<Uuid, (SyncTaskQueue<WebRequestRateLimiter>, u32)> = HashMap::new();
-        generate_queues_with_web_request_limiter(10, 10, 20).await
-            .into_iter()
-            .for_each(|q| {
-                manager_queue_map.insert(uuid::Uuid::new_v4(), (q, 10 as u32));
-                return ;
-            });
-        let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<SyncTask>::new(500)));
-        let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(500)));
-        let error_msg_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(500)));
-
-        let task_manager = TaskManager::new(
-            manager_queue_map, task_channel, error_msg_channel, failed_task_channel);
-        
-        return ();
-    }
 
     #[tokio::test]
     async fn test_producing_and_consuming_tasks() {
         init();
-        // console_subscriber::init();
 
-        // FIXME: only works with one queue and no more than 5 tasks.
-        // Find where deadlocks can happen. 
         let min_task = 100;
         let max_task = 120;
         let n_queues = 50;
@@ -544,15 +514,25 @@ mod tests {
                 manager_queue_map.insert(uuid::Uuid::new_v4(), (q, 10 as u32));
                 return ;
             });
-        let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<SyncTask>::new(10000)));
-        let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(5000)));
-        let error_msg_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(5000)));
+
+        let (task_sender,
+             task_receiver) = create_tokio_mpsc_channel::<SyncTask>(1000);
+
+        let (failed_task_sender, 
+             failed_task_receiver) = create_tokio_mpsc_channel::<(DatasetId, SyncTask)>(500);
+
+        let (error_msg_sender,
+             error_msg_receiver) = create_tokio_spmc_channel::<TaskManagerError>(500);
+
+        // let task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<SyncTask>::new(10000)));
+        // let failed_task_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<(DatasetId, SyncTask)>::new(5000)));
+        // let error_msg_channel = Arc::new(Mutex::new(TokioMpscMessageBus::<TaskManagerError>::new(5000)));
         
-        let task_channel_clone = task_channel.clone();
-        let failed_task_channel_clone = failed_task_channel.clone();
-        let error_msg_channel_clone = error_msg_channel.clone();
+        // let task_channel_clone = task_channel.clone();
+        // let failed_task_channel_clone = failed_task_channel.clone();
+        // let error_msg_channel_clone = error_msg_channel.clone();
         let mut task_manager = TaskManager::new(
-            manager_queue_map, task_channel, error_msg_channel, failed_task_channel);
+            manager_queue_map, task_sender, error_msg_sender, failed_task_receiver);
         
         let send_task = tokio::spawn(async move {
             let result = task_manager.start().await;

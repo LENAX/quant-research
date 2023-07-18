@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::domain::synchronization::{rate_limiter::{RateLimitStatus, RateLimiter}, custom_errors::TimerError};
 use derivative::Derivative;
 use getset::{Getters, Setters};
-use log::{error, info};
+use log::error;
 
 #[derive(Debug)]
 pub struct InvalidLimitError;
@@ -33,8 +33,6 @@ impl Error for InvalidLimitError {
         None
     }
 }
-
-
 
 #[derive(Derivative, Debug, Clone, Getters, Setters)]
 #[derivative(Default)]

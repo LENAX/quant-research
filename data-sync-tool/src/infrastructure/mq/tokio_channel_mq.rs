@@ -1,7 +1,8 @@
 use std::error::Error;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, broadcast};
+use derivative::Derivative;
+use tokio::sync::{mpsc, broadcast, watch};
 use core::fmt::Debug;
 
 use super::message_bus::{MessageBus, MessageBusReceiver, MessageBusError, MessageBusSender};
@@ -30,13 +31,24 @@ pub fn create_tokio_mpsc_channel<T>(n: usize) -> (TokioMpscMessageBusSender<T>, 
     return (sender, receiver)
 }
 
+pub fn create_tokio_spmc_channel<T: std::clone::Clone>(n: usize) -> (TokioSpmcMessageBusSender<T>, TokioSpmcMessageBusReceiver<T>){
+    let (tx, mut rx) = broadcast::channel::<T>(n);
+    let sender = TokioSpmcMessageBusSender{ sender: tx, closed: false };
+    let receiver = TokioSpmcMessageBusReceiver { receiver: rx, closed: false };
+
+    return (sender, receiver)
+}
+
 #[async_trait]
 impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> {
     /// TODO: Error Handling
     /// TODO: Graceful shutdown
-    async fn send(&self, message: T) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn send(&self, message: T) -> Result<(), MessageBusError<T>> {
         println!("Sending message: {:?}", message);
-        self.sender.send(message).await?;
+        let r = self.sender.send(message).await;
+        if let Err(e) = r {
+            return Err(MessageBusError::SendFailed(e.0));
+        }
         // self.sender.try_send(message)?;
         Ok(())
     }
@@ -64,15 +76,15 @@ impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> 
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TokioMpscMessageBusReceiver<T> {
     receiver: mpsc::Receiver<T>,
 }
 
 #[async_trait]
-impl<T> MessageBusReceiver<T> for TokioMpscMessageBusReceiver<T> {
+impl<T: std::marker::Send> MessageBusReceiver<T> for TokioMpscMessageBusReceiver<T> {
     async fn receive(&mut self) -> Option<T> {
-        let data = self.receiver.receive().await;
+        let data = self.receiver.recv().await;
         return data;
     }
 
@@ -84,7 +96,7 @@ impl<T> MessageBusReceiver<T> for TokioMpscMessageBusReceiver<T> {
                 Ok(d)
             },
             Err(e) => {
-                MessageBusError::ReceiveFailed(e.to_string())
+                Err(MessageBusError::ReceiveFailed(e.to_string()))
             }
         }
     }
@@ -100,11 +112,13 @@ pub struct TokioMpscMessageBusSender<T> {
 }
 
 #[async_trait]
-impl<T> MessageBusSender<T> for TokioMpscMessageBusSender<T> {
+impl<T> MessageBusSender<T> for TokioMpscMessageBusSender<T> 
+where T: std::marker::Send + std::convert::From<tokio::sync::mpsc::error::TrySendError<T>>
+{
     async fn send(&self, message: T) -> Result<(), MessageBusError<T>> {
         let result = self.sender.send(message).await;
         if let Err(e) = result {
-            return MessageBusError::SendFailed(e.into())
+            return Err(MessageBusError::SendFailed(e.0))
         }
         Ok(())
     }
@@ -112,7 +126,7 @@ impl<T> MessageBusSender<T> for TokioMpscMessageBusSender<T> {
     fn try_send(&self, message: T) -> Result<(), MessageBusError<T>> {
         let result = self.sender.try_send(message);
         if let Err(e) = result {
-            return MessageBusError::SendFailed(e.into())
+            return Err(MessageBusError::SendFailed(e.into()));
         }
         Ok(())
     }
@@ -126,51 +140,59 @@ impl<T> MessageBusSender<T> for TokioMpscMessageBusSender<T> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TokioSpmcMessageBusSender<T> {
     sender: broadcast::Sender<T>,
+    closed: bool
 }
 
 
 #[async_trait]
-impl<T> MessageBusSender<T> for TokioSpmcMessageBusSender<T> {
+impl<T> MessageBusSender<T> for TokioSpmcMessageBusSender<T>
+where T: std::marker::Send + std::convert::From<tokio::sync::mpsc::error::TrySendError<T>>
+{
     async fn send(&self, message: T) -> Result<(), MessageBusError<T>> {
         let result = self.sender.send(message);
         if let Err(e) = result {
-            return MessageBusError::SendFailed(e.into())
+            return Err(MessageBusError::SendFailed(e.0))
         }
         Ok(())
     }
 
     fn try_send(&self, message: T) -> Result<(), MessageBusError<T>> {
-        let result = self.sender.try_send(message);
+        let result = self.sender.send(message);
         if let Err(e) = result {
-            return MessageBusError::SendFailed(e.into())
+            return Err(MessageBusError::SendFailed(e.0))
         }
         Ok(())
     }
     
     async fn close(&self) {
-        self.sender.closed().await;
+        drop(self.sender);
+        self.closed = true;
     }
     
     fn is_closed(&self) -> bool {
-        self.sender.is_closed()
+        self.closed
     }
     
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TokioSpmcMessageBusReceiver<T> {
     // use broadcast channel to leverage its buffering ability
     receiver: broadcast::Receiver<T>,
+    closed: bool
 }
 
 #[async_trait]
-impl<T> MessageBusReceiver<T> for TokioSpmcMessageBusReceiver<T> {
+impl<T: Clone + std::marker::Send> MessageBusReceiver<T> for TokioSpmcMessageBusReceiver<T> {
     async fn receive(&mut self) -> Option<T> {
-        let data = self.receiver.receive().await;
-        return data;
+        let r = self.receiver.recv().await;
+        match r {
+            Ok(data) => { Some(data) },
+            Err(e) => { None }
+        }
     }
     
     fn try_recv(&mut self) -> Result<T, MessageBusError<T>> {
@@ -181,13 +203,14 @@ impl<T> MessageBusReceiver<T> for TokioSpmcMessageBusReceiver<T> {
                 Ok(d)
             },
             Err(e) => {
-                MessageBusError::ReceiveFailed(e.to_string())
+                Err(MessageBusError::ReceiveFailed(e.to_string()))
             }
         }
     }
     
     fn close(&mut self) {
-        self.receiver.close();
+        drop(self.receiver);
+        self.closed = true;
     }
 }
 

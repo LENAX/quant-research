@@ -101,7 +101,7 @@ impl error::Error for RequestMethodParsingError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TimerError {
     TimeCountFailedError,
     TimerAlreadyRunningError,

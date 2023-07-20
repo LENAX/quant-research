@@ -4,8 +4,15 @@ use std::{error::Error, fmt::{Display, Formatter}};
 use std::fmt;
 
 #[derive(Debug)]
+pub enum MessageBusFailureCause {
+    Full,
+    Closed,
+    Unknown
+}
+
+#[derive(Debug)]
 pub enum MessageBusError<T> {
-    SendFailed(T),
+    SendFailed(T, MessageBusFailureCause),
     ReceiveFailed(String)
 }
 
@@ -55,14 +62,14 @@ pub trait OneshotMessageBus {}
 
 // Marks a multiple consumer multiple producer message bus
 pub trait BroadcastMessageBus<T> {
-    fn subsribe() -> dyn MessageBusReceiver<T>;
+    fn subsribe(&self) -> Box<dyn MessageBusReceiver<T>>;
     fn receiver_count(&self) -> usize;
     fn same_channel(&self, other: &Self) -> bool;
 }
 
 // Marks a single producer multiple consumer message bus
 pub trait SpmcMessageBus<T> {
-    fn subsribe() -> dyn MessageBusReceiver<T>;
+    fn sub(&self) -> Box<dyn MessageBusReceiver<T>>;
     fn receiver_count(&self) -> usize;
     fn same_channel(&self, other: &Self) -> bool;
 }

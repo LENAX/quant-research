@@ -1,11 +1,11 @@
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use tokio::sync::{mpsc, broadcast, watch};
+use tokio::sync::{mpsc::{self, error::TrySendError}, broadcast, watch};
 use core::fmt::Debug;
 
-use super::message_bus::{MessageBus, MessageBusReceiver, MessageBusError, MessageBusSender};
+use super::message_bus::{MessageBus, MessageBusReceiver, MessageBusError, MessageBusSender, MpscMessageBus, SpmcMessageBus, MessageBusFailureCause};
 
 /// A Message Bus implemented by Tokio Mpsc Channel
 pub struct TokioMpscMessageBus<T: Send + Sync + 'static + Debug> {
@@ -34,7 +34,7 @@ pub fn create_tokio_mpsc_channel<T>(n: usize) -> (TokioMpscMessageBusSender<T>, 
 pub fn create_tokio_spmc_channel<T: std::clone::Clone>(n: usize) -> (TokioSpmcMessageBusSender<T>, TokioSpmcMessageBusReceiver<T>){
     let (tx, mut rx) = broadcast::channel::<T>(n);
     let sender = TokioSpmcMessageBusSender{ sender: tx, closed: false };
-    let receiver = TokioSpmcMessageBusReceiver { receiver: rx, closed: false };
+    let receiver = TokioSpmcMessageBusReceiver { receiver: Arc::new(rx), closed: false };
 
     return (sender, receiver)
 }
@@ -47,7 +47,7 @@ impl<T: Debug + Send + Sync + 'static> MessageBus<T> for TokioMpscMessageBus<T> 
         println!("Sending message: {:?}", message);
         let r = self.sender.send(message).await;
         if let Err(e) = r {
-            return Err(MessageBusError::SendFailed(e.0));
+            return Err(MessageBusError::SendFailed(e.0, MessageBusFailureCause::Unknown));
         }
         // self.sender.try_send(message)?;
         Ok(())
@@ -81,6 +81,8 @@ pub struct TokioMpscMessageBusReceiver<T> {
     receiver: mpsc::Receiver<T>,
 }
 
+impl<T> MpscMessageBus for TokioMpscMessageBusReceiver<T> {}
+
 #[async_trait]
 impl<T: std::marker::Send> MessageBusReceiver<T> for TokioMpscMessageBusReceiver<T> {
     async fn receive(&mut self) -> Option<T> {
@@ -111,14 +113,14 @@ pub struct TokioMpscMessageBusSender<T> {
     sender: mpsc::Sender<T>,
 }
 
+impl<T> MpscMessageBus for TokioMpscMessageBusSender<T> {}
+
 #[async_trait]
-impl<T> MessageBusSender<T> for TokioMpscMessageBusSender<T> 
-where T: std::marker::Send + std::convert::From<tokio::sync::mpsc::error::TrySendError<T>>
-{
+impl<T: std::marker::Send> MessageBusSender<T> for TokioMpscMessageBusSender<T> {
     async fn send(&self, message: T) -> Result<(), MessageBusError<T>> {
         let result = self.sender.send(message).await;
         if let Err(e) = result {
-            return Err(MessageBusError::SendFailed(e.0))
+            return Err(MessageBusError::SendFailed(e.0, MessageBusFailureCause::Unknown))
         }
         Ok(())
     }
@@ -126,7 +128,14 @@ where T: std::marker::Send + std::convert::From<tokio::sync::mpsc::error::TrySen
     fn try_send(&self, message: T) -> Result<(), MessageBusError<T>> {
         let result = self.sender.try_send(message);
         if let Err(e) = result {
-            return Err(MessageBusError::SendFailed(e.into()));
+            match e {
+                TrySendError::Full(t) => {
+                    return Err(MessageBusError::SendFailed(t, MessageBusFailureCause::Full));
+                },
+                TrySendError::Closed(t) => {
+                    return Err(MessageBusError::SendFailed(t, MessageBusFailureCause::Closed));
+                }
+            }
         }
         Ok(())
     }
@@ -146,15 +155,32 @@ pub struct TokioSpmcMessageBusSender<T> {
     closed: bool
 }
 
+impl<T: std::clone::Clone + std::marker::Send> SpmcMessageBus<T> for TokioSpmcMessageBusSender<T> {
+    fn sub(&self) -> Box<dyn MessageBusReceiver<T>> {
+        let mut new_receiver = TokioSpmcMessageBusReceiver {
+            receiver: Arc::new(self.sender.subscribe()),
+            closed: false
+        };
+        Box::new(new_receiver)
+    }
+
+    fn receiver_count(&self) -> usize {
+        self.sender.receiver_count()
+    }
+
+    fn same_channel(&self, other: &Self) -> bool {
+        self.sender.same_channel(&other.sender)
+    }
+}
 
 #[async_trait]
 impl<T> MessageBusSender<T> for TokioSpmcMessageBusSender<T>
-where T: std::marker::Send + std::convert::From<tokio::sync::mpsc::error::TrySendError<T>>
+where T: std::marker::Send
 {
     async fn send(&self, message: T) -> Result<(), MessageBusError<T>> {
         let result = self.sender.send(message);
         if let Err(e) = result {
-            return Err(MessageBusError::SendFailed(e.0))
+            return Err(MessageBusError::SendFailed(e.0, MessageBusFailureCause::Unknown))
         }
         Ok(())
     }
@@ -162,7 +188,7 @@ where T: std::marker::Send + std::convert::From<tokio::sync::mpsc::error::TrySen
     fn try_send(&self, message: T) -> Result<(), MessageBusError<T>> {
         let result = self.sender.send(message);
         if let Err(e) = result {
-            return Err(MessageBusError::SendFailed(e.0))
+            return Err(MessageBusError::SendFailed(e.0, MessageBusFailureCause::Unknown))
         }
         Ok(())
     }
@@ -178,12 +204,15 @@ where T: std::marker::Send + std::convert::From<tokio::sync::mpsc::error::TrySen
     
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TokioSpmcMessageBusReceiver<T> {
     // use broadcast channel to leverage its buffering ability
-    receiver: broadcast::Receiver<T>,
+    receiver: Arc<broadcast::Receiver<T>>,
     closed: bool
 }
+
+
+
 
 #[async_trait]
 impl<T: Clone + std::marker::Send> MessageBusReceiver<T> for TokioSpmcMessageBusReceiver<T> {

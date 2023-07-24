@@ -169,7 +169,6 @@ impl error::Error for TaskManagerError {
 
 #[async_trait]
 pub trait SyncTaskManager {
-    // async fn start(&self) -> Result<(), TaskManagerError>;
     async fn start(&mut self) -> Result<(), TaskManagerError>;
     async fn stop(&mut self);
 }
@@ -363,12 +362,21 @@ where
                 }
             }
         };
+
+        let task_handles = fetch_tasks.map(|t| {
+            tokio::spawn(t)
+        });
         
         
         println!("Waiting for all tasks to complete.");
 
+        // join!(
+        //     join_all(fetch_tasks),
+        //     handle_failures()
+        // );
+
         join!(
-            join_all(fetch_tasks),
+            join_all(task_handles),
             handle_failures()
         );
         
@@ -454,12 +462,12 @@ mod tests {
         return WebRequestRateLimiter::new(max_request, max_daily_request, cooldown).unwrap();
     }
 
-    pub fn new_empty_queue<T: RateLimiter>(rate_limiter: T) -> SyncTaskQueue<T> {
-        return  SyncTaskQueue::<T>::new(vec![], Some(rate_limiter));
+    pub fn new_empty_queue<T: RateLimiter>(rate_limiter: T, max_retry: Option<u32>) -> SyncTaskQueue<T> {
+        return SyncTaskQueue::<T>::new(vec![], Some(rate_limiter), max_retry);
     }
 
-    pub fn new_empty_queue_limitless<T: RateLimiter>(rate_limiter: Option<T>) -> SyncTaskQueue<T> {
-        return  SyncTaskQueue::new(vec![], None);
+    pub fn new_empty_queue_limitless<T: RateLimiter>(max_retry: Option<u32>) -> SyncTaskQueue<T> {
+        return SyncTaskQueue::new(vec![], None, max_retry);
     }
 
     pub async fn new_queue_with_random_amount_of_tasks<T: RateLimiter>(rate_limiter: T, min_tasks: u32, max_tasks: u32) -> SyncTaskQueue<T> {

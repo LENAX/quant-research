@@ -14,6 +14,7 @@ use derivative::Derivative;
 use futures::future::join_all;
 use getset::{Getters, Setters};
 
+use log::error;
 use rbatis::dark_std::sync::vec;
 use tokio::{join, sync::{Mutex, RwLock}, task::JoinHandle};
 use uuid::Uuid;
@@ -385,16 +386,26 @@ where
 
         let queues_ref = Arc::clone(&queues);
         let handle_failures = tokio::spawn(async move {
-            while let Some((dataset_id, failed_task)) =
-                failed_task_channel.lock().await.receive().await {
-                let queues = queues_ref.read().await;
-                if let Some(q) = queues.get(&dataset_id) {
-                    let mut q_lock = q.lock().await;
-                    if let Some(mut n_retry) = q_lock.retries_left() {
-                        if n_retry > 0 {
-                            q_lock.push_back(failed_task);
-                            q_lock.set_retries_left(Some(n_retry - 1));
+            loop {
+                let mut failed_task_channel_lock = failed_task_channel.lock().await;
+                let receive_result = failed_task_channel_lock.try_recv();
+                match receive_result {
+                    Ok((qid, failed_task)) => {
+                        let queues = queues_ref.read().await;
+                        if let Some(q) = queues.get(&qid) {
+                            let mut q_lock = q.lock().await;
+                            if let Some(mut n_retry) = q_lock.retries_left() {
+                                if n_retry > 0 {
+                                    q_lock.push_back(failed_task);
+                                    q_lock.set_retries_left(Some(n_retry - 1));
+                                }
+                            }
                         }
+                    },
+                    Err(e) => {
+                        error!("{}", e);
+                        // just to make this task quit, not the final solution
+                        break;
                     }
                 }
             }
@@ -402,7 +413,7 @@ where
 
         println!("Waiting for all tasks to complete.");
         
-        join!(
+        let _ = join!(
             join_all(fetch_tasks),
             handle_failures
         );
@@ -601,18 +612,36 @@ mod tests {
             info!("MQ lock acquired...");
             let mut task_cnt = 0;
             let recv_task = tokio::spawn(async move {
-                while let Some(_) = task_receiver.receive().await {
-                    task_cnt += 1;
-                    info!("Received task, count: {:?}", task_cnt);
+                loop {
+                    let result = task_receiver.try_recv();
+                    match result {
+                        Ok(_) => { 
+                            task_cnt += 1;
+                            info!("Received task, count: {:?}", task_cnt);
+                        },
+                        Err(e) => {
+                            error!("{}", e);
+                            break;
+                        }
+                    }
                 }
             });
             let err_report_task = tokio::spawn(async move {
-                while let Some(err) = error_msg_receiver.receive().await {
-                    info!("Received err, err: {:?}", err);
+                loop {
+                    let result = error_msg_receiver.try_recv();
+                    match result {
+                        Ok(e) => { 
+                            error!("Received error, {:?}", e);
+                        },
+                        Err(e) => {
+                            error!("{}", e);
+                            break;
+                        }
+                    }
                 }
             });
 
-            join!(recv_task, err_report_task);
+            let _ = join!(recv_task, err_report_task);
             
             // let _ = task_channel_lock.close();
             info!("Done receiving tasks...");

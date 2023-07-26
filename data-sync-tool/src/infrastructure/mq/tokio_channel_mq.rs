@@ -1,11 +1,10 @@
-use std::{error::Error, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use derivative::Derivative;
-use tokio::sync::{mpsc::{self, error::TrySendError}, broadcast, watch};
+use tokio::sync::{mpsc::{self, error::TrySendError}, broadcast, watch, Mutex};
 use core::fmt::Debug;
 
-use super::message_bus::{MessageBus, MessageBusReceiver, MessageBusError, MessageBusSender, MpscMessageBus, SpmcMessageBus, MessageBusFailureCause};
+use super::message_bus::{MessageBus, MessageBusReceiver, MessageBusError, MessageBusSender, MpscMessageBus, SpmcMessageBus, MessageBusFailureCause, StaticClonableMpscMQ, StaticClonableAsyncComponent};
 
 /// A Message Bus implemented by Tokio Mpsc Channel
 pub struct TokioMpscMessageBus<T: Send + Sync + 'static + Debug> {
@@ -34,7 +33,7 @@ pub fn create_tokio_mpsc_channel<T>(n: usize) -> (TokioMpscMessageBusSender<T>, 
 pub fn create_tokio_spmc_channel<T: std::clone::Clone>(n: usize) -> (TokioSpmcMessageBusSender<T>, TokioSpmcMessageBusReceiver<T>){
     let (tx, mut rx) = broadcast::channel::<T>(n);
     let sender = TokioSpmcMessageBusSender{ sender: tx, closed: false };
-    let receiver = TokioSpmcMessageBusReceiver { receiver: Arc::new(rx), closed: false };
+    let receiver = TokioSpmcMessageBusReceiver { receiver: Arc::new(Mutex::new(rx)), closed: false };
 
     return (sender, receiver)
 }
@@ -113,7 +112,8 @@ pub struct TokioMpscMessageBusSender<T> {
     sender: mpsc::Sender<T>,
 }
 
-impl<T> MpscMessageBus for TokioMpscMessageBusSender<T> {}
+impl<T: std::marker::Send + std::marker::Sync + std::fmt::Debug> MpscMessageBus for TokioMpscMessageBusSender<T> {}
+impl<T: std::clone::Clone + std::marker::Send + std::marker::Sync + std::fmt::Debug +'static> StaticClonableMpscMQ for TokioMpscMessageBusSender<T> {}
 
 #[async_trait]
 impl<T: std::marker::Send> MessageBusSender<T> for TokioMpscMessageBusSender<T> {
@@ -140,7 +140,7 @@ impl<T: std::marker::Send> MessageBusSender<T> for TokioMpscMessageBusSender<T> 
         Ok(())
     }
 
-    async fn close(&self) {
+    async fn close(&mut self) {
         self.sender.closed().await;
     }
 
@@ -155,10 +155,10 @@ pub struct TokioSpmcMessageBusSender<T> {
     closed: bool
 }
 
-impl<T: std::clone::Clone + std::marker::Send> SpmcMessageBus<T> for TokioSpmcMessageBusSender<T> {
+impl<T: std::clone::Clone + std::marker::Send + 'static> SpmcMessageBus<T> for TokioSpmcMessageBusSender<T> {
     fn sub(&self) -> Box<dyn MessageBusReceiver<T>> {
         let mut new_receiver = TokioSpmcMessageBusReceiver {
-            receiver: Arc::new(self.sender.subscribe()),
+            receiver: Arc::new(Mutex::new(self.sender.subscribe())),
             closed: false
         };
         Box::new(new_receiver)
@@ -193,8 +193,8 @@ where T: std::marker::Send
         Ok(())
     }
     
-    async fn close(&self) {
-        drop(self.sender);
+    async fn close(&mut self) {
+        // drop(self.sender);
         self.closed = true;
     }
     
@@ -207,17 +207,20 @@ where T: std::marker::Send
 #[derive(Debug, Clone)]
 pub struct TokioSpmcMessageBusReceiver<T> {
     // use broadcast channel to leverage its buffering ability
-    receiver: Arc<broadcast::Receiver<T>>,
+    receiver: Arc<Mutex<broadcast::Receiver<T>>>,
     closed: bool
 }
 
-
+// impl<T: std::marker::Send + std::marker::Sync + std::fmt::Debug> MpscMessageBus for TokioMpscMessageBusSender<T> {}
+impl<T: std::clone::Clone + std::marker::Send + std::marker::Sync + std::fmt::Debug +'static> StaticClonableAsyncComponent for TokioSpmcMessageBusReceiver<T> {}
 
 
 #[async_trait]
 impl<T: Clone + std::marker::Send> MessageBusReceiver<T> for TokioSpmcMessageBusReceiver<T> {
     async fn receive(&mut self) -> Option<T> {
-        let r = self.receiver.recv().await;
+        let mut receiver = self.receiver.lock().await;
+        let r = receiver.recv().await;
+        drop(receiver);
         match r {
             Ok(data) => { Some(data) },
             Err(e) => { None }
@@ -225,7 +228,9 @@ impl<T: Clone + std::marker::Send> MessageBusReceiver<T> for TokioSpmcMessageBus
     }
     
     fn try_recv(&mut self) -> Result<T, MessageBusError<T>> {
-        let data = self.receiver.try_recv();
+        let mut receiver = self.receiver.blocking_lock();
+        let data = receiver.try_recv();
+
 
         match data {
             Ok(d) => {
@@ -238,7 +243,7 @@ impl<T: Clone + std::marker::Send> MessageBusReceiver<T> for TokioSpmcMessageBus
     }
     
     fn close(&mut self) {
-        drop(self.receiver);
+        // drop(self.receiver);
         self.closed = true;
     }
 }

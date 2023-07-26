@@ -28,6 +28,8 @@ impl<T: std::fmt::Debug> Error for MessageBusError<T> {
     }
 }
 
+pub trait StaticClonableMpscMQ: MpscMessageBus + Sync + Send + Clone + 'static {}
+pub trait StaticClonableAsyncComponent: Sync + Send + Clone + 'static {}
 
 /// Message Queue Trait
 /// TODO: Consider separate receivers and senders as different related traits
@@ -43,7 +45,7 @@ pub trait MessageBus<T: Send + Sync + 'static> {
 pub trait MessageBusSender<T> {
     async fn send(&self, message: T) -> Result<(), MessageBusError<T>>;
     fn try_send(&self, message: T) -> Result<(), MessageBusError<T>>;
-    async fn close(&self);
+    async fn close(&mut self);
     fn is_closed(&self) -> bool;
 }
 

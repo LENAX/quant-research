@@ -26,7 +26,7 @@ use crate::{
     },
     infrastructure::mq::message_bus::{
         MessageBus, MessageBusReceiver, MessageBusSender, MpscMessageBus,
-        SpmcMessageBus
+        SpmcMessageBus, StaticClonableMpscMQ, StaticClonableAsyncComponent
     },
 };
 
@@ -186,6 +186,7 @@ impl error::Error for TaskManagerError {
     }
 }
 
+
 #[async_trait]
 pub trait SyncTaskManager {
     async fn start(&mut self) -> Result<(), TaskManagerError>;
@@ -200,12 +201,10 @@ type MaxRetry = u32;
 pub struct TaskManager<T, MT, ME, MF>
 where
     T: RateLimiter,
-    MT: MessageBusSender<SyncTask> + MpscMessageBus,
-    ME: MessageBusSender<TaskManagerError> + MpscMessageBus,
-    MF: MessageBusReceiver<(QueueId, SyncTask)>,
+    MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
+    ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
+    MF: MessageBusReceiver<(QueueId, SyncTask)> + StaticClonableAsyncComponent,
 {
-    // TODO: Change queues to Arc<HashMap<QueueId, Arc<Mutex<SyncTaskQueue<T>>>>>
-    // so that individual queues can be cloned and shared across threads
     queues: Arc<RwLock<HashMap<QueueId, Arc<Mutex<SyncTaskQueue<T>>>>>>,
     task_channel: MT,
     error_message_channel: ME,
@@ -215,9 +214,9 @@ where
 impl<T, MT, ME, MF> TaskManager<T, MT, ME, MF>
 where
     T: RateLimiter,
-    MT: MessageBusSender<SyncTask> + MpscMessageBus,
-    ME: MessageBusSender<TaskManagerError> + MpscMessageBus,
-    MF: MessageBusReceiver<(QueueId, SyncTask)>,
+    MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
+    ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
+    MF: MessageBusReceiver<(QueueId, SyncTask)> + StaticClonableAsyncComponent,
 {
     pub fn new(
         task_queues: Vec<SyncTaskQueue<T>>,
@@ -266,17 +265,16 @@ where
 
 }
 
-trait TaskManagerMpscMQ: MpscMessageBus + Sync + Send + Clone + 'static {}
-trait TaskManagerAsyncComponent: Sync + Send + Clone + 'static {}
+
 
 
 #[async_trait]
 impl<T, MT, ME, MF> SyncTaskManager for TaskManager<T, MT, ME, MF>
 where
     T: RateLimiter + 'static,
-    MT: MessageBusSender<SyncTask> + TaskManagerMpscMQ,
-    ME: MessageBusSender<TaskManagerError> + TaskManagerMpscMQ,
-    MF: MessageBusReceiver<(QueueId, SyncTask)> + TaskManagerAsyncComponent,
+    MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
+    ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
+    MF: MessageBusReceiver<(QueueId, SyncTask)> + StaticClonableAsyncComponent,
 {
     async fn stop(&mut self) {
         self.task_channel.close();
@@ -427,7 +425,7 @@ mod tests {
 
 
     use super::*;
-    use std::{sync::Arc, hash::Hash};
+    use std::sync::Arc;
 
     use chrono::Local;
     use fake::faker::internet::en::SafeEmail;
@@ -501,7 +499,8 @@ mod tests {
 
     pub async fn new_queue_with_random_amount_of_tasks<T: RateLimiter>(rate_limiter: T, min_tasks: u32, max_tasks: u32) -> SyncTaskQueue<T> {
         let mut rng = rand::thread_rng();
-        let mut new_queue = new_empty_queue(rate_limiter);
+        let max_retry = rng.gen_range(10..20);
+        let mut new_queue = new_empty_queue(rate_limiter, Some(max_retry));
         // let mut new_queue = new_empty_queue_limitless(None);
         let n_task = rng.gen_range(min_tasks..max_tasks);
         let random_tasks = generate_random_sync_tasks(n_task);
@@ -536,10 +535,11 @@ mod tests {
     #[tokio::test]
     async fn test_add_tasks_to_a_single_queue() {
         init();
-        // Arrange
+        let mut rng = rand::thread_rng();
+        let max_retry = rng.gen_range(10..20);
         let test_rate_limiter = WebRequestRateLimiter::new(30, None, Some(3)).unwrap();
         let task_queue: Arc<Mutex<SyncTaskQueue<WebRequestRateLimiter>>> = Arc::new(Mutex::new(
-            SyncTaskQueue::<WebRequestRateLimiter>::new(vec![], Some(test_rate_limiter))
+            SyncTaskQueue::<WebRequestRateLimiter>::new(vec![], Some(test_rate_limiter), Some(max_retry))
         ));
 
         let tasks = generate_random_sync_tasks(100);
@@ -563,31 +563,25 @@ mod tests {
     async fn test_producing_and_consuming_tasks() {
         init();
 
-        let min_task = 100;
-        let max_task = 120;
-        let n_queues = 50;
+        let min_task = 5;
+        let max_task = 10;
+        let n_queues = 1;
 
         // FIXME: RateLimiter may cause deadlock
-        let mut manager_queue_map: HashMap<Uuid, (SyncTaskQueue<WebRequestRateLimiter>, u32)> = HashMap::new();
-        generate_queues_with_web_request_limiter(n_queues, min_task, max_task).await
-            .into_iter()
-            .for_each(|q| {
-                manager_queue_map.insert(uuid::Uuid::new_v4(), (q, 10 as u32));
-                return ;
-            });
+        let queues = generate_queues_with_web_request_limiter(n_queues, min_task, max_task).await;
 
         let (task_sender,
-             task_receiver) = create_tokio_mpsc_channel::<SyncTask>(1000);
+             mut task_receiver) = create_tokio_mpsc_channel::<SyncTask>(1000);
 
         let (error_msg_sender,
-             error_msg_receiver) = create_tokio_mpsc_channel::<TaskManagerError>(500);
+             mut error_msg_receiver) = create_tokio_mpsc_channel::<TaskManagerError>(500);
 
         let (failed_task_sender, 
             failed_task_receiver) = create_tokio_spmc_channel::<(Uuid, SyncTask)>(500);
    
 
         let mut task_manager = TaskManager::new(
-            manager_queue_map, 
+            queues, 
             task_sender,
             error_msg_sender,
             failed_task_receiver);

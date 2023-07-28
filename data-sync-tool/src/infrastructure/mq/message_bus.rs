@@ -13,7 +13,8 @@ pub enum MessageBusFailureCause {
 #[derive(Debug)]
 pub enum MessageBusError<T> {
     SendFailed(T, MessageBusFailureCause),
-    ReceiveFailed(String)
+    ReceiveFailed(String),
+    LockAcquistionFailed
 }
 
 impl<T> Display for MessageBusError<T> {

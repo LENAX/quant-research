@@ -298,16 +298,10 @@ where
                 let queue = Arc::clone(task_queue); // Cloning it here
                 let new_task_sender_channel = task_channel.clone();
                 let new_error_sender_channel = error_message_channel.clone();
-                let failed_task_channel = failed_task_channel.clone();
+                // let failed_task_channel = failed_task_channel.clone();
 
                 tokio::spawn(async move {
                     let q_id = q_id.clone();
-                    // let queue = Arc::clone(task_queue);
-                    
-                    // self 1
-                    // let new_task_sender_channel = task_sender.clone();
-                    
-                    // let new_error_sender_channel = Arc::clone(&new_error_sender);
                     let q_lock = queue.lock().await;
                     println!("Acquired lock for queue {:?}", q_id);
                     let mut no_task_found = false;
@@ -375,10 +369,18 @@ where
                                 }
                             },
                             Err(e) => {
-                                new_error_sender_channel.send(TaskManagerError::RateLimiterInitializationError(e));
+                                let result = new_error_sender_channel.send(TaskManagerError::RateLimiterInitializationError(e)).await;
+                                if let Err(e) = result {
+                                    error!("{:?}",e);
+                                }
                             }
                         }
                     }
+                    // Recommend dropping channels explicitly!
+                    drop(new_task_sender_channel);
+                    println!("Dropped task sender in queue {}!", q_id);
+                    drop(new_error_sender_channel);
+                    println!("Dropped error sender in queue {}!", q_id);
                     println!("Queue {} has no task left. Quitting...", q_id);
                 })
             })
@@ -575,8 +577,8 @@ mod tests {
         init();
 
         let min_task = 5;
-        let max_task = 10;
-        let n_queues = 1;
+        let max_task = 20;
+        let n_queues = 50;
 
         // FIXME: RateLimiter may cause deadlock
         let queues = generate_queues_with_web_request_limiter(n_queues, min_task, max_task).await;
@@ -613,30 +615,26 @@ mod tests {
             let mut task_cnt = 0;
             let recv_task = tokio::spawn(async move {
                 loop {
-                    let result = task_receiver.try_recv();
-                    match result {
-                        Ok(_) => { 
-                            task_cnt += 1;
-                            info!("Received task, count: {:?}", task_cnt);
-                        },
-                        Err(e) => {
-                            error!("{}", e);
-                            break;
-                        }
+                    let result = task_receiver.receive().await;
+                    if let Some(_) = result {
+                        task_cnt += 1;
+                        info!("Received task, count: {:?}", task_cnt);
+                    } else {
+                        // Important! Use this branch to exit.
+                        info!("No task left... Exit...");
+                        break;
                     }
                 }
             });
             let err_report_task = tokio::spawn(async move {
                 loop {
-                    let result = error_msg_receiver.try_recv();
-                    match result {
-                        Ok(e) => { 
-                            error!("Received error, {:?}", e);
-                        },
-                        Err(e) => {
-                            error!("{}", e);
-                            break;
-                        }
+                    let result = error_msg_receiver.receive().await;
+                    if let Some(e) = result {
+                        error!("Received error, {:?}", e);
+                    } else {
+                        // Important! Use this branch to exit.
+                        info!("No error received.");
+                        break;
                     }
                 }
             });

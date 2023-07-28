@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::lock;
+use log::error;
 use tokio::sync::{mpsc::{self, error::TrySendError}, broadcast, watch, Mutex};
 use core::fmt::Debug;
 
@@ -228,18 +230,25 @@ impl<T: Clone + std::marker::Send> MessageBusReceiver<T> for TokioSpmcMessageBus
     }
     
     fn try_recv(&mut self) -> Result<T, MessageBusError<T>> {
-        let mut receiver = self.receiver.blocking_lock();
-        let data = receiver.try_recv();
-
-
-        match data {
-            Ok(d) => {
-                Ok(d)
+        let lock_result = self.receiver.try_lock();
+        match lock_result {
+            Ok(mut receiver) => {
+                let data = receiver.try_recv();
+                match data {
+                    Ok(d) => {
+                        Ok(d)
+                    },
+                    Err(e) => {
+                        Err(MessageBusError::ReceiveFailed(e.to_string()))
+                    }
+                }
             },
             Err(e) => {
-                Err(MessageBusError::ReceiveFailed(e.to_string()))
+                error!("{:?}", e);
+                return Err(MessageBusError::LockAcquistionFailed);
             }
         }
+        
     }
     
     fn close(&mut self) {

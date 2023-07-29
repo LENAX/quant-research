@@ -576,11 +576,11 @@ mod tests {
     async fn test_producing_and_consuming_tasks() {
         init();
 
-        let min_task = 5;
-        let max_task = 20;
-        let n_queues = 50;
+        // pressure testing
+        let min_task = 50;
+        let max_task = 100;
+        let n_queues = 500;
 
-        // FIXME: RateLimiter may cause deadlock
         let queues = generate_queues_with_web_request_limiter(n_queues, min_task, max_task).await;
 
         let (task_sender,

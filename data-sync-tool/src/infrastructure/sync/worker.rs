@@ -19,7 +19,7 @@ use tungstenite::{connect, Message};
 use crate::{domain::synchronization::{
     sync_task::{SyncStatus, SyncTask},
     value_objects::task_spec::RequestMethod,
-}, infrastructure::mq::message_bus::MessageBus};
+}, infrastructure::mq::message_bus::{MessageBus, MessageBusSender, MessageBusReceiver, StaticClonableMpscMQ, StaticClonableAsyncComponent}};
 
 // use anyhow::Result;
 
@@ -109,8 +109,9 @@ pub fn create_long_running_workers<W: SyncWorker + LongRunningWorker>(n: u32) ->
 #[derivative(Default(bound = ""))]
 pub enum WorkerState {
     #[derivative(Default)]
-    Sleeping = 0,
-    Working = 1,
+    Sleeping,
+    Working,
+    Stopped
 }
 
 #[derive(Derivative, Getters, Setters)]
@@ -196,49 +197,45 @@ pub enum SyncWorkerErrorMessage {
 pub struct WebsocketSyncWorker<MD, MW, ME> {
     state: WorkerState,
     // send data received from remote
-    data_channel: Arc<RwLock<MD>>,
+    data_sender: MD,
     // send and receive commands from other modules, typically when to stop receiving data
-    worker_msg_channel: Arc<RwLock<MW>>,
+    worker_command_receiver: MW,
     // send error messages
-    error_msg_channel: Arc<RwLock<ME>>,
+    error_sender: ME,
 }
 
 /// WebsocketSyncWorker is a long running work
 impl<MD, MW, ME> LongRunningWorker for WebsocketSyncWorker<MD, MW, ME>
-where 
-    MD: MessageBus<SyncWorkerData> + std::marker::Send,
-    MW: MessageBus<SyncWorkerMessage> + std::marker::Send,
-    ME: MessageBus<SyncWorkerErrorMessage> + std::marker::Send + std::marker::Sync
+where
+    MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ,
+    MW: MessageBusReceiver<SyncWorkerMessage> + StaticClonableMpscMQ,
+    ME: MessageBusReceiver<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
 {}
 
 impl<MD, MW, ME> WebsocketSyncWorker<MD, MW, ME> 
 where 
-    MD: MessageBus<SyncWorkerData> + std::marker::Send,
-    MW: MessageBus<SyncWorkerMessage> + std::marker::Send,
-    ME: MessageBus<SyncWorkerErrorMessage> + std::marker::Send + std::marker::Sync
+    MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ,
+    MW: MessageBusReceiver<SyncWorkerMessage> + StaticClonableMpscMQ,
+    ME: MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
 {
     fn new(
-        data_channel: Arc<RwLock<MD>>,
-        worker_msg_channel: Arc<RwLock<MW>>,
-        error_msg_channel: Arc<RwLock<ME>>,
+        data_sender: MD,
+        worker_command_receiver: MW,
+        error_sender: ME,
     ) -> WebsocketSyncWorker<MD, MW, ME> {
         return Self {
             state: WorkerState::Sleeping,
-            data_channel,
-            worker_msg_channel,
-            error_msg_channel
+            data_sender,
+            worker_command_receiver,
+            error_sender
         };
     }
 
-    async fn close_all_channels(&self) {
-        let mut dc_lock = self.data_channel.write().await;
-        dc_lock.close().await;
-
-        let mut wm_lock = self.worker_msg_channel.write().await;
-        wm_lock.close().await;
-
-        let mut err_msg_lock = self.error_msg_channel.write().await;
-        err_msg_lock.close().await;
+    async fn close_all_channels(&mut self) {
+        self.data_sender.close().await;
+        self.worker_command_receiver.close();
+        self.error_sender.close().await;
+        self.state = WorkerState::Stopped;
     }
 }
 
@@ -246,12 +243,14 @@ where
 /// You can wrap up a python websocket service to host the data
 /// note that the quote may not be that accurate, so it is not recommended to use it in backtesting
 
+// impl<MD, MW, ME> LongRunningWorker for WebsocketSyncWorker<MD, MW, ME> {}
+
 #[async_trait]
 impl<MD, MW, ME> SyncWorker for WebsocketSyncWorker<MD, MW, ME> 
 where 
-    MD: MessageBus<SyncWorkerData> + std::marker::Send + std::marker::Sync,
-    MW: MessageBus<SyncWorkerMessage> + std::marker::Send + std::marker::Sync,
-    ME: MessageBus<SyncWorkerErrorMessage> + std::marker::Send + std::marker::Sync,
+    MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ,
+    MW: MessageBusReceiver<SyncWorkerMessage> + StaticClonableMpscMQ,
+    ME: MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
 {
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>> {
         self.state = WorkerState::Working;
@@ -266,9 +265,9 @@ where
             Err(e) => {
                 println!("Connection failed!");
                 sync_task.failed();
-                let err_channel = self.error_msg_channel.read().await;
-                let _ = err_channel.send(SyncWorkerErrorMessage::WebsocketConnectionFailed(e.to_string())).await;
-                drop(err_channel);
+                // let err_channel = self.error_msg_channel.read().await;
+                let _ = self.error_sender.send(SyncWorkerErrorMessage::WebsocketConnectionFailed(e.to_string())).await;
+                // drop(err_channel);
                 self.close_all_channels().await;
                 return Err(Box::new(e));
             },
@@ -289,19 +288,13 @@ where
                 // 3. error message handling task
                 let mut running = true;
                 while running {
-                    let mut work_mq_lock = self.worker_msg_channel.write().await;
-                    let command = work_mq_lock.receive().await;
+                    let command = self.worker_command_receiver.receive().await;
                     println!("Worker acquired work mq lock! Command: {:?}", command);
                     println!("Receiving command: {:?}", command);
                     if let Some(command) = command {
                         match command {
                             SyncWorkerMessage::StopReceiveData => {
                                 running = false;
-                                let _ = work_mq_lock.send(SyncWorkerMessage::DataRecieverStopped).await;
-                                drop(work_mq_lock);
-                                let data_channel_lock = self.data_channel.read().await;
-                                let _ = data_channel_lock.send(SyncWorkerData::StopCommandReceived).await.expect("send failed");
-                                drop(data_channel_lock);
                                 sync_task.finished();
                                 info!("Sent stop receive command to receiver!");
                                 println!("Worker released work mq lock! Stopped receiving data.")
@@ -310,6 +303,9 @@ where
                                 println!("Why send me back this message? {:?}", data_reciever_stopped);
                             }
                         }
+                    } else {
+                        println!("Command channel closed. exit.");
+                        break;
                     }
                     let result = socket.read_message();
                     match result {
@@ -321,16 +317,19 @@ where
                                 let parse_result: Result<Value, serde_json::Error> = serde_json::from_str(&s);
                                 match parse_result {
                                     Ok(value) => {
-                                        let data_channel_lock = self.data_channel.read().await;
-                                        let _ = data_channel_lock.send(SyncWorkerData::Data(value)).await.expect("send failed");
-                                        drop(data_channel_lock);
-                                        info!("Successfully send value");
+                                        let result = self.data_sender.send(SyncWorkerData::Data(value)).await;
+                                        match result {
+                                            Ok(()) => {
+                                                info!("Successfully send value!");
+                                            },
+                                            Err(e) => {
+                                                error!("error: {e}");
+                                            }
+                                        }
                                     },
                                     Err(e) => {
                                         error!("Failed to parse text to json value");
-                                        let err_channel_lock = self.error_msg_channel.read().await;
-                                        let _ = err_channel_lock.send(SyncWorkerErrorMessage::OtherError(e.to_string())).await;
-                                        drop(err_channel_lock);
+                                        let _ = self.error_sender.send(SyncWorkerErrorMessage::OtherError(e.to_string())).await;
                                     }
                                 }
                             }
@@ -338,9 +337,7 @@ where
                         },
                         Err(e) => {
                             error!("Failed to read data from socket! error: {}", e);
-                            let err_channel_lock = self.error_msg_channel.read().await;
-                            let _ = err_channel_lock.send(SyncWorkerErrorMessage::NoDataReceived).await;
-                            drop(err_channel_lock);
+                            let _ = self.error_sender.send(SyncWorkerErrorMessage::NoDataReceived).await;
                         }
                     }
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -444,10 +441,18 @@ mod tests {
     #[tokio::test]
     async fn websocket_worker_should_work() {
         let _ = env_logger::builder().is_test(true).try_init();
-        warn!("!!");
-        let data_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncWorkerData>::new(100)));
-        let error_message_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncWorkerErrorMessage>::new(100)));
-        let worker_message_channel = Arc::new(RwLock::new(TokioMpscMessageBus::<SyncWorkerMessage>::new(1000)));
+        // warn!("!!");
+        
+        let (task_sender,
+             mut task_receiver) = create_tokio_mpsc_channel::<SyncWorkerData>(1000);
+
+        let (error_msg_sender,
+             mut error_msg_receiver) = create_tokio_mpsc_channel::<SyncWorkerMessage>(500);
+
+        let (failed_task_sender, 
+            failed_task_receiver) = create_tokio_spmc_channel::<SyncWorkerErrorMessage>(500);
+   
+
         let wm_channel = worker_message_channel.clone();
         let wm_channel_clone = worker_message_channel.clone();
         let dc = data_channel.clone();

@@ -19,7 +19,7 @@ use tungstenite::{connect, Message};
 use crate::{domain::synchronization::{
     sync_task::{SyncStatus, SyncTask},
     value_objects::task_spec::RequestMethod,
-}, infrastructure::mq::message_bus::{MessageBus, MessageBusSender, MessageBusReceiver, StaticClonableMpscMQ, StaticClonableAsyncComponent}};
+}, infrastructure::mq::message_bus::{MessageBus, MessageBusSender, MessageBusReceiver, StaticClonableMpscMQ, StaticClonableAsyncComponent, StaticMpscMQReceiver}};
 
 // use anyhow::Result;
 
@@ -172,7 +172,7 @@ impl WebAPISyncWorker {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SyncWorkerData {
     Data(Value),
     StopCommandReceived
@@ -184,7 +184,7 @@ pub enum SyncWorkerMessage {
     DataRecieverStopped
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SyncWorkerErrorMessage {
     NoDataReceived,
     WebsocketConnectionFailed(String),
@@ -208,14 +208,14 @@ pub struct WebsocketSyncWorker<MD, MW, ME> {
 impl<MD, MW, ME> LongRunningWorker for WebsocketSyncWorker<MD, MW, ME>
 where
     MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ,
-    MW: MessageBusReceiver<SyncWorkerMessage> + StaticClonableMpscMQ,
+    MW: MessageBusReceiver<SyncWorkerMessage> + StaticMpscMQReceiver,
     ME: MessageBusReceiver<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
 {}
 
 impl<MD, MW, ME> WebsocketSyncWorker<MD, MW, ME> 
 where 
     MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ,
-    MW: MessageBusReceiver<SyncWorkerMessage> + StaticClonableMpscMQ,
+    MW: MessageBusReceiver<SyncWorkerMessage> + StaticMpscMQReceiver,
     ME: MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
 {
     fn new(
@@ -232,10 +232,14 @@ where
     }
 
     async fn close_all_channels(&mut self) {
+        info!("Closing data sender channel...");
         self.data_sender.close().await;
+        info!("Done! Closing worker_command_receiver channel...");
         self.worker_command_receiver.close();
+        info!("Done! Closing error_sender channel...");
         self.error_sender.close().await;
         self.state = WorkerState::Stopped;
+        info!("All channel has closed.");
     }
 }
 
@@ -249,7 +253,7 @@ where
 impl<MD, MW, ME> SyncWorker for WebsocketSyncWorker<MD, MW, ME> 
 where 
     MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ,
-    MW: MessageBusReceiver<SyncWorkerMessage> + StaticClonableMpscMQ,
+    MW: MessageBusReceiver<SyncWorkerMessage> + StaticMpscMQReceiver,
     ME: MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
 {
     async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), Box<dyn Error>> {
@@ -378,9 +382,10 @@ mod tests {
         infrastructure::{sync::worker::{
             build_headers, build_request, SyncWorker, WebAPISyncWorker,
         },
-        mq::tokio_channel_mq::TokioMpscMessageBus,
+        mq::tokio_channel_mq::create_tokio_spmc_channel,
         mq::message_bus::MessageBus,},
     };
+    use crate::infrastructure::mq::tokio_channel_mq::create_tokio_mpsc_channel;
     use serde_json::json;
     use serde_json::Value;
     use std::fs::File;
@@ -446,22 +451,14 @@ mod tests {
         let (task_sender,
              mut task_receiver) = create_tokio_mpsc_channel::<SyncWorkerData>(1000);
 
-        let (error_msg_sender,
-             mut error_msg_receiver) = create_tokio_mpsc_channel::<SyncWorkerMessage>(500);
+        let (worker_command_sender,
+             mut worker_command_receiver) = create_tokio_mpsc_channel::<SyncWorkerMessage>(500);
 
-        let (failed_task_sender, 
-            failed_task_receiver) = create_tokio_spmc_channel::<SyncWorkerErrorMessage>(500);
-   
-
-        let wm_channel = worker_message_channel.clone();
-        let wm_channel_clone = worker_message_channel.clone();
-        let dc = data_channel.clone();
-        let ec1 = error_message_channel.clone();
-        let ec2 = error_message_channel.clone();
-        // let ec3 = error_message_channel.clone();
-
+        let (error_sender, 
+             mut error_receiver) = create_tokio_mpsc_channel::<SyncWorkerErrorMessage>(500);
+        // let error_receiver2 = error_receiver.clone();
         let mut test_worker = WebsocketSyncWorker::new(
-            data_channel, worker_message_channel, error_message_channel);
+            task_sender, worker_command_receiver, error_sender);
         let mut test_task = SyncTask::default();
         let spec = TaskSpecification::new(
             "ws://localhost:8000/ws",
@@ -481,32 +478,21 @@ mod tests {
         let stop_receive_watcher_task = tokio::spawn(async move {
             loop {
                 let now = chrono::Local::now();
-                println!("The time is {:?}", now);
+                // println!("The time is {:?}", now);
 
                 if now >= stop_time {
                     println!("Trying to stop worker");
-                    let wm_channel_lock = wm_channel.read().await;
-                    println!("Acquired worker message lock in stop_receive_watcher_task!");
-                    let result = wm_channel_lock.send(SyncWorkerMessage::StopReceiveData).await;
-                    drop(wm_channel_lock);
-                    if let Err(e) = result {
-                        println!("Error occurred while trying to send command: {:?}", e);
-                    }
-                    
-                    // Hey! Huge mistake here! You should not receive your own data without releasing the lock!
-                    // Should acquire the lock again!
-                    let mut wm_channel_lock = wm_channel.write().await;
-
-                    // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    let response = wm_channel_lock.receive().await;
-                    drop(wm_channel_lock);
-                    if let Some(msg) = response {
-                        if let SyncWorkerMessage::DataRecieverStopped = msg {
-                            println!("Instructed worker to stop. Exit.");
+                    let result = worker_command_sender.send(SyncWorkerMessage::StopReceiveData).await;
+                    match result {
+                        Ok(()) => {
+                            info!("Command sent. Stop.");
                             break;
+                        },
+                        Err(e) => {
+                            println!("Error occurred while trying to send command: {:?}", e);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         }
                     }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             }
@@ -514,19 +500,14 @@ mod tests {
 
         let receiver_task = tokio::spawn(async move {
             loop {
-                let mut ec_lock = ec1.write().await;
-                let err = ec_lock.receive().await;
-                drop(ec_lock);
-
+                let err = error_receiver.receive().await;
                 if let Some(e) = err {
                     println!("Worker failed! Error: {:?}", e);
                     println!("receiver_task exited.");
                     break;
                 }
                 
-                let mut data_channel_lock = dc.write().await;
-                let message = data_channel_lock.receive().await;
-                drop(data_channel_lock);
+                let message = task_receiver.receive().await;
                 match message {
                     Some(msg) => {
                         match msg {
@@ -539,27 +520,16 @@ mod tests {
                             }
                         }
                     },
-                    None => { println!("No data received."); }
+                    None => {
+                        println!("No data received.");
+                        break;
+                    }
                 }
                 println!("receiver going to sleep for 100ms...");
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
         });
 
-        let err_handle_task = tokio::spawn(async move {
-            loop {
-                let mut ec_lock = ec2.write().await;
-                let err = ec_lock.receive().await;
-                drop(ec_lock);
-
-                if let Some(e) = err {
-                    println!("Worker failed! Error: {:?}", e);
-                    println!("err_handle_task exited.");
-                    break;
-                }
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            }
-        });
 
         let _ = tokio::join!(
             handle_task, stop_receive_watcher_task, receiver_task

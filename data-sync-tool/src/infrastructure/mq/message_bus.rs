@@ -14,7 +14,9 @@ pub enum MessageBusFailureCause {
 pub enum MessageBusError<T> {
     SendFailed(T, MessageBusFailureCause),
     ReceiveFailed(String),
-    LockAcquistionFailed
+    LockAcquistionFailed,
+    SenderClosed,
+    ReceiverClosed
 }
 
 impl<T> Display for MessageBusError<T> {
@@ -29,6 +31,7 @@ impl<T: std::fmt::Debug> Error for MessageBusError<T> {
     }
 }
 
+pub trait StaticMpscMQReceiver: MpscMessageBus + Sync + Send + 'static {}
 pub trait StaticClonableMpscMQ: MpscMessageBus + Sync + Send + Clone + 'static {}
 pub trait StaticClonableAsyncComponent: Sync + Send + Clone + 'static {}
 
@@ -72,7 +75,7 @@ pub trait BroadcastMessageBus<T> {
 
 // Marks a single producer multiple consumer message bus
 pub trait SpmcMessageBus<T> {
-    fn sub(&self) -> Box<dyn MessageBusReceiver<T>>;
-    fn receiver_count(&self) -> usize;
-    fn same_channel(&self, other: &Self) -> bool;
+    fn sub(&self) -> Result<Box<dyn MessageBusReceiver<T>>, MessageBusError<T>>;
+    fn receiver_count(&self) -> Result<usize, MessageBusError<T>>;
+    fn same_channel(&self, other: &Self) -> Result<bool, MessageBusError<T>>;
 }

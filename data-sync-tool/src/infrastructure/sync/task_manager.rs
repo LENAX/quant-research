@@ -432,7 +432,7 @@ mod tests {
         domain::synchronization::rate_limiter::{RateLimitStatus, RateLimiter},
         infrastructure::{
             sync::sync_rate_limiter::WebRequestRateLimiter,
-            mq::tokio_channel_mq::{TokioMpscMessageBus, create_tokio_mpsc_channel, create_tokio_spmc_channel}},
+            mq::tokio_channel_mq::{create_tokio_mpsc_channel, create_tokio_spmc_channel}},
     };
     use log::{info, error};
 

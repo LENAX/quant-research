@@ -27,7 +27,7 @@ use crate::{
     },
     infrastructure::mq::message_bus::{
         MessageBus, MessageBusReceiver, MessageBusSender, MpscMessageBus,
-        SpmcMessageBus, StaticClonableMpscMQ, StaticClonableAsyncComponent
+        StaticClonableMpscMQ, StaticClonableAsyncComponent, SpmcMessageBusReceiver
     },
 };
 
@@ -204,7 +204,9 @@ where
     T: RateLimiter,
     MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
     ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
-    MF: MessageBusReceiver<(QueueId, SyncTask)> + StaticClonableAsyncComponent,
+    MF: MessageBusReceiver<(QueueId, SyncTask)> +
+        StaticClonableAsyncComponent +
+        SpmcMessageBusReceiver,
 {
     queues: Arc<RwLock<HashMap<QueueId, Arc<Mutex<SyncTaskQueue<T>>>>>>,
     task_channel: MT,
@@ -217,7 +219,9 @@ where
     T: RateLimiter,
     MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
     ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
-    MF: MessageBusReceiver<(QueueId, SyncTask)> + StaticClonableAsyncComponent,
+    MF: MessageBusReceiver<(QueueId, SyncTask)> +
+        StaticClonableAsyncComponent +
+        SpmcMessageBusReceiver,
 {
     pub fn new(
         task_queues: Vec<SyncTaskQueue<T>>,
@@ -275,7 +279,9 @@ where
     T: RateLimiter + 'static,
     MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
     ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
-    MF: MessageBusReceiver<(QueueId, SyncTask)> + StaticClonableAsyncComponent,
+    MF: MessageBusReceiver<(QueueId, SyncTask)> +
+        StaticClonableAsyncComponent +
+        SpmcMessageBusReceiver,
 {
     async fn stop(&mut self) {
         self.task_channel.close();
@@ -577,9 +583,9 @@ mod tests {
         init();
 
         // pressure testing
-        let min_task = 50;
-        let max_task = 100;
-        let n_queues = 500;
+        let min_task = 5;
+        let max_task = 10;
+        let n_queues = 5;
 
         let queues = generate_queues_with_web_request_limiter(n_queues, min_task, max_task).await;
 

@@ -5,7 +5,7 @@ use uuid::Uuid;
 use core::fmt::Debug;
 use getset::{Getters, Setters, MutGetters};
 
-use super::message_bus::{MessageBus, MessageBusReceiver, MessageBusError, MessageBusSender, MpscMessageBus, SpmcMessageBus, MessageBusFailureCause, StaticClonableMpscMQ, StaticClonableAsyncComponent, StaticMpscMQReceiver};
+use super::message_bus::{MessageBus, MessageBusReceiver, MessageBusError, MessageBusSender, MpscMessageBus, SpmcMessageBusSender, MessageBusFailureCause, StaticClonableMpscMQ, StaticClonableAsyncComponent, StaticMpscMQReceiver, SpmcMessageBusReceiver, BroadcastMessageBusSender, BroadcastingMessageBusReceiver};
 
 
 pub fn create_tokio_mpsc_channel<T>(
@@ -175,8 +175,8 @@ impl<T> TokioSpmcMessageBusSender<T> {
     }
 }
 
-impl<T: std::clone::Clone + std::marker::Send + 'static> SpmcMessageBus<T> for TokioSpmcMessageBusSender<T> {
-    fn sub(&self) -> Result<Box<dyn MessageBusReceiver<T>>, MessageBusError<T>> {
+impl<T: std::clone::Clone + std::marker::Send + 'static> SpmcMessageBusSender<T> for TokioSpmcMessageBusSender<T> {
+    fn subscribe(&self) -> Result<Box<dyn MessageBusReceiver<T>>, MessageBusError<T>> {
         match self.sender() {
             Some(inner_sender) => {
                 let new_receiver = TokioSpmcMessageBusReceiver::new(
@@ -305,6 +305,8 @@ impl<T: Clone> Clone for TokioSpmcMessageBusReceiver<T> {
     }
 }
 
+impl<T> SpmcMessageBusReceiver for TokioSpmcMessageBusReceiver<T> {}
+
 #[async_trait]
 impl<T: Clone + std::marker::Send> MessageBusReceiver<T> for TokioSpmcMessageBusReceiver<T> {
     async fn receive(&mut self) -> Option<T> {
@@ -401,6 +403,45 @@ where T: std::marker::Send
     }
 }
 
+impl<T: std::clone::Clone + std::marker::Send + 'static> BroadcastMessageBusSender<T> for TokioBroadcastingMessageBusSender<T> {
+    fn subsribe(&self) -> Result<Box<dyn MessageBusReceiver<T>>, MessageBusError<T>> {
+        match self.sender() {
+            Some(inner_sender) => {
+                let new_receiver = TokioBroadcastingMessageBusReceiver::new(
+                    self.channel_id, inner_sender.subscribe());
+                Ok(Box::new(new_receiver))
+            },
+            None => {
+                Err(MessageBusError::SenderClosed)
+            }
+        }
+    }
+
+    fn receiver_count(&self) -> Result<usize, MessageBusError<T>> {
+        if let Some(inner_sender) = self.sender() {
+            Ok(inner_sender.receiver_count())
+        } else {
+            Err(MessageBusError::SenderClosed)
+        }
+    }
+
+    fn same_channel(&self, other: &Self) -> Result<bool, MessageBusError<T>> {
+        // self.sender.same_channel(&other.sender)
+        if let Some(inner_sender) = self.sender() {
+            if other.is_closed() {
+                return Ok(false);
+            }
+            if let Some(other_sender_inner) = other.sender() {
+                return Ok(inner_sender.same_channel(other_sender_inner));
+            } else {
+                return Ok(false);
+            }
+        } else {
+            Err(MessageBusError::SenderClosed)
+        }
+    }
+}
+
 
 #[derive(Debug, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub", get_mut = "pub")]
@@ -446,6 +487,8 @@ impl<T: Clone> TokioBroadcastingMessageBusReceiver<T> {
 
 impl<T: std::clone::Clone + std::marker::Send + std::marker::Sync + std::fmt::Debug +'static> StaticClonableAsyncComponent
 for TokioBroadcastingMessageBusReceiver<T> {}
+
+impl<T> BroadcastingMessageBusReceiver for TokioBroadcastingMessageBusReceiver<T> {}
 
 impl<T: Clone> Clone for TokioBroadcastingMessageBusReceiver<T> {
     fn clone(&self) -> TokioBroadcastingMessageBusReceiver<T> {

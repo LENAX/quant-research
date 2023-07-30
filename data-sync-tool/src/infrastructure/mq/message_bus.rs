@@ -14,7 +14,6 @@ pub enum MessageBusFailureCause {
 pub enum MessageBusError<T> {
     SendFailed(T, MessageBusFailureCause),
     ReceiveFailed(String),
-    LockAcquistionFailed,
     SenderClosed,
     ReceiverClosed
 }
@@ -66,16 +65,22 @@ pub trait MpscMessageBus {}
 // Marks a single consumer single producer message bus
 pub trait OneshotMessageBus {}
 
-// Marks a multiple consumer multiple producer message bus
-pub trait BroadcastMessageBus<T> {
-    fn subsribe(&self) -> Box<dyn MessageBusReceiver<T>>;
-    fn receiver_count(&self) -> usize;
-    fn same_channel(&self, other: &Self) -> bool;
-}
-
-// Marks a single producer multiple consumer message bus
-pub trait SpmcMessageBus<T> {
-    fn sub(&self) -> Result<Box<dyn MessageBusReceiver<T>>, MessageBusError<T>>;
+// Marks a multiple consumer multiple producer message bus sender
+pub trait BroadcastMessageBusSender<T> {
+    fn subsribe(&self) -> Result<Box<dyn MessageBusReceiver<T>>, MessageBusError<T>>;
     fn receiver_count(&self) -> Result<usize, MessageBusError<T>>;
     fn same_channel(&self, other: &Self) -> Result<bool, MessageBusError<T>>;
 }
+
+// Marks a multiple consumer multiple producer message bus sender
+pub trait BroadcastingMessageBusReceiver {}
+
+// Marks a single producer multiple consumer message bus sender
+pub trait SpmcMessageBusSender<T> {
+    fn subscribe(&self) -> Result<Box<dyn MessageBusReceiver<T>>, MessageBusError<T>>;
+    fn receiver_count(&self) -> Result<usize, MessageBusError<T>>;
+    fn same_channel(&self, other: &Self) -> Result<bool, MessageBusError<T>>;
+}
+
+// Marks a single producer multiple consumer message bus receiver
+pub trait SpmcMessageBusReceiver {}

@@ -14,11 +14,12 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::domain::synchronization::{rate_limiter::{RateLimitStatus, RateLimiter}, custom_errors::TimerError};
+use crate::{domain::synchronization::{rate_limiter::{RateLimitStatus, RateLimiter}, custom_errors::TimerError}, application::synchronization::dtos::task_manager::CreateRateLimiterRequest};
 use derivative::Derivative;
 use getset::{Getters, Setters};
-use log::error;
+use log::{error, info};
 
+// Errors
 #[derive(Debug)]
 pub struct InvalidLimitError;
 
@@ -34,6 +35,32 @@ impl Error for InvalidLimitError {
     }
 }
 
+// Factory Methods
+// TODO: add an abstract factory method to provide an unified interface for all rate limiter factories
+#[derive(Debug, Clone, Copy)]
+pub enum RateLimiterImpls {
+    WebRequestRateLimiter
+}
+
+pub fn new_web_request_limiter(max_request: i64, max_daily_request: Option<i64>, cooldown: Option<i64>) -> WebRequestRateLimiter {
+    return WebRequestRateLimiter::new(max_request, max_daily_request, cooldown).unwrap();
+}
+
+pub fn create_rate_limiter(
+    create_limiter_req: &CreateRateLimiterRequest,
+    limiter_type: RateLimiterImpls,
+) -> Box<dyn RateLimiter> {
+    match limiter_type {
+        RateLimiterImpls::WebRequestRateLimiter => Box::new(new_web_request_limiter(
+            *create_limiter_req.max_request(),
+            *create_limiter_req.max_daily_request(),
+            *create_limiter_req.cooldown(),
+        )),
+        // handle other LimiterTypes here
+    }
+}
+
+// Component Definition
 #[derive(Derivative, Debug, Clone, Getters, Setters)]
 #[derivative(Default)]
 #[getset(get = "pub")]
@@ -57,14 +84,14 @@ impl RateLimiter for WebRequestRateLimiter {
         {
             let mut count_down_lock = self.count_down.lock().await;
             if *count_down_lock != None {
-                println!("RateLimiter {}'s timer has already been started!", self.id);
+                info!("RateLimiter {}'s timer has already been started!", self.id);
             }
 
             if reset_timer {
                 // if the timer is not activated, or the caller explicitly asks to reset the timer
                 let cool_down_second_lock = self.cool_down_seconds.write().await;
                 *count_down_lock = Some(Duration::seconds(*cool_down_second_lock));
-                println!("In RateLimiter {}, countdown: {:?}", self.id, count_down_lock);
+                info!("In RateLimiter {}, countdown: {:?}", self.id, count_down_lock);
             }
         }
         let count_down_clone = Arc::clone(&self.count_down);
@@ -75,7 +102,7 @@ impl RateLimiter for WebRequestRateLimiter {
         // start a timer in background to count the time before allowing the next request
         let task = tokio::spawn(async move {
             loop {
-                println!("In RateLimiter {}, the clock is ticking...", limiter_id);
+                info!("In RateLimiter {}, the clock is ticking...", limiter_id);
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                 let mut count_down_lock = count_down_clone.lock().await;
                 if let Some(count_down) = count_down_lock.as_mut() {
@@ -83,19 +110,19 @@ impl RateLimiter for WebRequestRateLimiter {
 
                     if let Some(updated_count_down) = updated_count_down {
                         *count_down = updated_count_down;
-                        println!("In RateLimiter {}, Time left: {}", limiter_id, *count_down);
+                        info!("In RateLimiter {}, Time left: {}", limiter_id, *count_down);
                         if *count_down <= Duration::seconds(0) {
-                            println!("In RateLimiter {}, time is up! Counting down: {}", limiter_id, *count_down);
+                            info!("In RateLimiter {}, time is up! Counting down: {}", limiter_id, *count_down);
                             drop(count_down_lock); // break out of the loop when the count down is reached.
                             
                             // Then recover the limit
-                            println!("try to recover the limit...");
+                            info!("try to recover the limit...");
                             let max_minute_request_lock = max_minute_request_clone.read().await;
-                            println!("max_minute_request_lock acquired...");
+                            info!("max_minute_request_lock acquired...");
                             let mut remaining_minute_requests_lock = remaining_minute_request_clone.lock().await;
-                            println!("remaining_minute_requests_lock acquired...");
+                            info!("remaining_minute_requests_lock acquired...");
                             *remaining_minute_requests_lock = *max_minute_request_lock;
-                            println!("remaining_minute resetted...");
+                            info!("remaining_minute resetted...");
                             // stop counting time
                             break;
                         }
@@ -105,7 +132,7 @@ impl RateLimiter for WebRequestRateLimiter {
                     }
                 }
             }
-            println!("Timer stopped...");
+            info!("Timer stopped...");
         });
 
         return Ok(task);
@@ -119,7 +146,7 @@ impl RateLimiter for WebRequestRateLimiter {
             // Max daily limit reached
             if let Some(remaining_daily_requests) = *remaining_daily_requests_lock {
                 if remaining_daily_requests <= 0 {
-                    println!("Maximum daily limit reached!");
+                    info!("Maximum daily limit reached!");
                     return RateLimitStatus::RequestPerDayExceeded;
                 }
             }
@@ -139,7 +166,7 @@ impl RateLimiter for WebRequestRateLimiter {
                 }
                 
                 if countdown.num_seconds() <= 0{
-                    println!("Countdown is over! second: {}", countdown.num_seconds());
+                    info!("Countdown is over! second: {}", countdown.num_seconds());
                     // reset the count down to none and allow to send request
                     *count_down_lock = None;
                     count_down_activated = false;
@@ -148,7 +175,7 @@ impl RateLimiter for WebRequestRateLimiter {
         }
         
         if !count_down_activated {
-            println!("Count down is deactivated. Immediately allow one request!");
+            info!("Count down is deactivated. Immediately allow one request!");
             // reset the remaining_minute_requests
             let mut remaining_minute_requests_lock =
                 self.remaining_minute_requests.lock().await;
@@ -164,7 +191,7 @@ impl RateLimiter for WebRequestRateLimiter {
         }
         
         {
-            println!("Countdown is not activated. Proceed as normal");
+            info!("Countdown is not activated. Proceed as normal");
             let mut remaining_minute_requests_lock = self.remaining_minute_requests.lock().await;
             if *remaining_minute_requests_lock <= 0 {
                 // no more requests are allowed. Should start waiting immediately
@@ -220,18 +247,25 @@ impl WebRequestRateLimiter {
 
 #[cfg(test)]
 mod test{
-    use std::{error::Error, sync::Arc, cell::RefCell};
+    use std::{error::Error, sync::Arc, cell::RefCell, env};
     use futures::future::join_all;
 
-    // use log::println;
+    // use log::info;
 
+    use log::info;
     use tokio::{sync::Mutex, join, task::{JoinHandle}};
 
     use crate::{infrastructure::sync::sync_rate_limiter::WebRequestRateLimiter, domain::synchronization::rate_limiter::{RateLimiter, RateLimitStatus}};
 
+    fn init_logger() {
+        env::set_var("RUST_LOG", "info");
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
     #[tokio::test]
     async fn it_should_count_remaining_time_as_expected() {
-        println!("Start timer test");
+        init_logger();
+        info!("Start timer test");
         let mut web_rate_limiter = Arc::new(Mutex::new(WebRequestRateLimiter::new(
             10, None, Some(3)
         ).unwrap()));
@@ -239,15 +273,15 @@ mod test{
         let rate_limiter_task = tokio::spawn(async move {
             for i in 0..100 {
                 // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                println!("Counting remaining time: {}", i);
+                info!("Counting remaining time: {}", i);
                 let apply_response = limiter_clone.lock().await.can_proceed().await;
                 let limiter_id = limiter_clone.lock().await.id().clone().to_string();
                 match apply_response {
                     RateLimitStatus::Ok(remaining_count) => {
-                        println!("Rate limiter {} permits this request, and there are {} available requests left", limiter_id, remaining_count);
+                        info!("Rate limiter {} permits this request, and there are {} available requests left", limiter_id, remaining_count);
                     },
                     RateLimitStatus::RequestPerDayExceeded => {
-                        println!("Oh no! Rate limiter {} rejects this request because daily limit is reached!", limiter_id);
+                        info!("Oh no! Rate limiter {} rejects this request because daily limit is reached!", limiter_id);
                     },
                     RateLimitStatus::RequestPerMinuteExceeded(should_start_timer, remaining_seconds) => {
                         if should_start_timer {
@@ -260,7 +294,7 @@ mod test{
                                 let _ = join!(join_handle);
                             }
                         }
-                        println!("Rate limiter {} rejects this request because minute limit is reached! Time remaining: {}", limiter_id, remaining_seconds);
+                        info!("Rate limiter {} rejects this request because minute limit is reached! Time remaining: {}", limiter_id, remaining_seconds);
                     }
                 }
             }
@@ -273,6 +307,7 @@ mod test{
 
     #[tokio::test]
     async fn it_should_run_several_limiters_concurrenly() {
+        init_logger();
         let limiters = vec![
             Arc::new(Mutex::new(WebRequestRateLimiter::new(5, None, Some(1)).unwrap())),
             Arc::new(Mutex::new(WebRequestRateLimiter::new(10, None, Some(3)).unwrap())),
@@ -286,15 +321,15 @@ mod test{
             let rate_limiter_task = tokio::spawn(async move {
                 for i in 0..100 {
                     // tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    println!("Counting remaining time: {}", i);
+                    info!("Counting remaining time: {}", i);
                     let apply_response = limiter_clone.lock().await.can_proceed().await;
                     let limiter_id = limiter_clone.lock().await.id().clone().to_string();
                     match apply_response {
                         RateLimitStatus::Ok(remaining_count) => {
-                            println!("Rate limiter {} permits this request, and there are {} available requests left", limiter_id, remaining_count);
+                            info!("Rate limiter {} permits this request, and there are {} available requests left", limiter_id, remaining_count);
                         },
                         RateLimitStatus::RequestPerDayExceeded => {
-                            println!("Oh no! Rate limiter {} rejects this request because daily limit is reached!", limiter_id);
+                            info!("Oh no! Rate limiter {} rejects this request because daily limit is reached!", limiter_id);
                         },
                         RateLimitStatus::RequestPerMinuteExceeded(should_start_timer, remaining_seconds) => {
                             if should_start_timer {
@@ -308,7 +343,7 @@ mod test{
                                     let _ = join!(join_handle);
                                 }
                             }
-                            println!("Rate limiter {} rejects this request because the maximum number of request per minute is reached! Time remaining: {}", limiter_id, remaining_seconds);
+                            info!("Rate limiter {} rejects this request because the maximum number of request per minute is reached! Time remaining: {}", limiter_id, remaining_seconds);
                         }
                     }
                 }

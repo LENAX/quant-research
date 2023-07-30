@@ -25,16 +25,73 @@ use crate::{
         rate_limiter::{RateLimitStatus, RateLimiter},
         sync_task::SyncTask,
     },
-    infrastructure::mq::message_bus::{
+    infrastructure::mq::{message_bus::{
         MessageBus, MessageBusReceiver, MessageBusSender, MpscMessageBus,
         StaticClonableMpscMQ, StaticClonableAsyncComponent, SpmcMessageBusReceiver
-    },
+    }, factory::get_tokio_mq_factory}, application::synchronization::dtos::task_manager::CreateTaskManagerRequest,
 };
 
-type QueueId = Uuid;
+use super::sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter};
+
+pub type QueueId = Uuid;
 type CooldownTimerTask = JoinHandle<()>;
 type TimeSecondLeft = i64;
 
+// Factory Methods
+pub fn new_empty_queue<T: RateLimiter>(rate_limiter: T, max_retry: Option<u32>) -> SyncTaskQueue<T> {
+    return SyncTaskQueue::<T>::new(vec![], Some(rate_limiter), max_retry);
+}
+
+pub fn new_empty_queue_limitless<T: RateLimiter>(max_retry: Option<u32>) -> SyncTaskQueue<T> {
+    return SyncTaskQueue::new(vec![], None, max_retry);
+}
+
+pub fn create_sync_task_manager<
+    T: RateLimiter + 'static,
+    MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
+    ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
+    MF: MessageBusReceiver<(QueueId, SyncTask)> +
+        StaticClonableAsyncComponent +
+        SpmcMessageBusReceiver,
+>(
+    create_request: &CreateTaskManagerRequest,
+    task_sender: MT,
+    error_sender: ME,
+    failed_task_receiver: MF
+) -> TaskManager<T, MT, ME, MF> where Vec<SyncTaskQueue<T>>: FromIterator<SyncTaskQueue<WebRequestRateLimiter>> {
+    // todo: use abstract factory and factory methods to avoid hard coding
+    // for now, we only have a few impls so we can simply hardcode the factory.
+    let queues: Vec<SyncTaskQueue<T>> = create_request
+        .create_task_queue_requests()
+        .iter()
+        .map(|req| {
+            match req.rate_limiter_param() {
+                Some(create_limiter_req) => {
+                    match req.rate_limiter_impl() {
+                        WebRequestRateLimiter => {
+                            let rate_limiter = new_web_request_limiter(
+                                *create_limiter_req.max_request(), *create_limiter_req.max_daily_request(), *create_limiter_req.cooldown()
+                            );
+                            let queue = new_empty_queue(
+                                rate_limiter, *req.max_retry());
+                            return queue;
+                        },
+                    }
+                },
+                None => {
+                    let queue = new_empty_queue_limitless(*req.max_retry());
+                    return queue;
+                },
+            }
+        }).collect();
+    
+    let task_manager = TaskManager::new(
+        queues, task_sender, error_sender, failed_task_receiver);
+    return task_manager;
+}
+
+
+// Component Definitions
 #[derive(Debug)]
 pub enum SyncTaskQueueValue {
     Task(Option<SyncTask>),
@@ -193,8 +250,6 @@ pub trait SyncTaskManager {
     async fn start(&mut self) -> Result<(), TaskManagerError>;
     async fn stop(&mut self);
 }
-
-type MaxRetry = u32;
 
 /// TaskManager
 #[derive(Derivative, Getters, Setters, Default)]
@@ -437,8 +492,7 @@ mod tests {
         domain::synchronization::value_objects::task_spec::{TaskSpecification, RequestMethod},
         domain::synchronization::rate_limiter::{RateLimitStatus, RateLimiter},
         infrastructure::{
-            sync::sync_rate_limiter::WebRequestRateLimiter,
-            mq::tokio_channel_mq::{create_tokio_mpsc_channel, create_tokio_spmc_channel}},
+            sync::sync_rate_limiter::{WebRequestRateLimiter, new_web_request_limiter}, mq::factory::{create_tokio_mpsc_channel, create_tokio_spmc_channel},},
     };
     use log::{info, error};
 
@@ -504,18 +558,7 @@ mod tests {
         }).collect()
     }
 
-    pub fn new_web_request_limiter(max_request: i64, max_daily_request: Option<i64>, cooldown: Option<i64>) -> WebRequestRateLimiter{
-        return WebRequestRateLimiter::new(max_request, max_daily_request, cooldown).unwrap();
-    }
-
-    pub fn new_empty_queue<T: RateLimiter>(rate_limiter: T, max_retry: Option<u32>) -> SyncTaskQueue<T> {
-        return SyncTaskQueue::<T>::new(vec![], Some(rate_limiter), max_retry);
-    }
-
-    pub fn new_empty_queue_limitless<T: RateLimiter>(max_retry: Option<u32>) -> SyncTaskQueue<T> {
-        return SyncTaskQueue::new(vec![], None, max_retry);
-    }
-
+    
     pub async fn new_queue_with_random_amount_of_tasks<T: RateLimiter>(rate_limiter: T, min_tasks: u32, max_tasks: u32) -> SyncTaskQueue<T> {
         let mut rng = rand::thread_rng();
         let max_retry = rng.gen_range(10..20);

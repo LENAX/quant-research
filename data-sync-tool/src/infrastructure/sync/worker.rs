@@ -22,7 +22,7 @@ use crate::{domain::synchronization::{
     value_objects::task_spec::RequestMethod,
 }, infrastructure::mq::message_bus::{MessageBus, MessageBusSender, MessageBusReceiver, StaticClonableMpscMQ, StaticClonableAsyncComponent, StaticMpscMQReceiver, BroadcastingMessageBusReceiver}};
 
-// use anyhow::Result;
+
 
 #[derive(Derivative, Debug,)]
 pub struct RequestMethodNotSupported;
@@ -115,7 +115,12 @@ fn build_request(
     }
 }
 
-pub fn create_long_running_workers<W: SyncWorker + LongRunningWorker>(n: u32) -> Vec<W> {
+
+pub fn create_long_running_workers<LW: SyncWorker + LongRunningWorker>(n: u32) -> Vec<LW> {
+    todo!()
+}
+
+pub fn create_short_running_workers<SW: SyncWorker + ShortTaskHandlingWorker>(n: u32) -> Vec<SW> {
     todo!()
 }
 
@@ -312,12 +317,6 @@ where
 
 }
 
-/// Hint: Use python package easyquotation to fetch second level full market quotation
-/// You can wrap up a python websocket service to host the data
-/// note that the quote may not be that accurate, so it is not recommended to use it in backtesting
-
-// impl<MD, MW, ME> LongRunningWorker for WebsocketSyncWorker<MD, MW, ME> {}
-
 #[async_trait]
 impl<MD, MW, ME> SyncWorker for WebsocketSyncWorker<MD, MW, ME> 
 where 
@@ -364,7 +363,6 @@ where
                 let mut running = true;
                 while running {
                     let recv_command_result = self.inner_command_receiver()?.try_recv();
-                    println!("Receiving command: {:?}", command);
                     match recv_command_result {
                         Ok(command) => {
                             match command {
@@ -462,10 +460,8 @@ mod tests {
         infrastructure::{sync::worker::{
             build_headers, build_request, SyncWorker, WebAPISyncWorker,
         },
-        mq::tokio_channel_mq::{create_tokio_spmc_channel, create_tokio_broadcasting_channel},
-        mq::message_bus::MessageBus,},
+        mq::{message_bus::MessageBus, factory::{create_tokio_mpsc_channel, create_tokio_broadcasting_channel, get_mq_factory, SupportedMQImpl, MQType}},},
     };
-    use crate::infrastructure::mq::tokio_channel_mq::create_tokio_mpsc_channel;
     use serde_json::json;
     use serde_json::Value;
     use std::fs::File;
@@ -527,7 +523,8 @@ mod tests {
     #[tokio::test]
     async fn websocket_worker_should_work() {
         init_logger();
-
+        // let tokio_mpsc_creator = get_mq_factory::<SyncWorkerData>(SupportedMQImpl::InMemoryTokioChannel, MQType::Mpsc);
+        
         let (task_sender,
              mut task_receiver) = create_tokio_mpsc_channel::<SyncWorkerData>(1000);
 

@@ -3,6 +3,7 @@ use futures::channel::mpsc::TryRecvError;
 use std::{error::Error, fmt::{Display, Formatter}};
 use std::fmt;
 
+// Errors
 #[derive(Debug)]
 pub enum MessageBusFailureCause {
     Full,
@@ -30,6 +31,9 @@ impl<T: std::fmt::Debug> Error for MessageBusError<T> {
     }
 }
 
+
+
+// Interfaces
 pub trait StaticMpscMQReceiver: MpscMessageBus + Sync + Send + 'static {}
 pub trait StaticClonableMpscMQ: MpscMessageBus + Sync + Send + Clone + 'static {}
 pub trait StaticClonableAsyncComponent: Sync + Send + Clone + 'static {}

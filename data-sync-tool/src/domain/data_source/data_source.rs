@@ -1,7 +1,7 @@
 //! Data Source Domain Object Definition
 
 use chrono::prelude::*;
-use fake::{ Fake};
+use fake::Fake;
 use getset::{CopyGetters, Getters, MutGetters, Setters};
 use std::{cell::RefCell, collections::HashMap, error, fmt, sync::Arc};
 use uuid::Uuid;
@@ -110,7 +110,7 @@ impl DataSource {
                         last_update_time: Some(update_dt),
                         update_successful: Some(update_ok),
                         datasets: id_mapped_datasets,
-                        local_storage: LocalStorage::default()
+                        local_storage: LocalStorage::default(),
                     });
                 } else {
                     return Ok(Self {
@@ -122,7 +122,7 @@ impl DataSource {
                         last_update_time: Some(update_dt),
                         update_successful: Some(false),
                         datasets: id_mapped_datasets,
-                        local_storage: LocalStorage::default()
+                        local_storage: LocalStorage::default(),
                     });
                 }
             }
@@ -146,10 +146,7 @@ impl DataSource {
         return Ok(self);
     }
 
-    pub fn get_datasets_by_ids(
-        &self,
-        dataset_ids: &Vec<&str>,
-    ) -> HashMap<String, Dataset> {
+    pub fn get_datasets_by_ids(&self, dataset_ids: &Vec<&str>) -> HashMap<String, Dataset> {
         let mut result_map: HashMap<String, Dataset> = HashMap::new();
         for id in dataset_ids {
             if let Some(matched_ds) = self.datasets.get(*id) {
@@ -214,7 +211,7 @@ impl Default for DataSource {
             last_update_time: None,
             update_successful: None,
             datasets: HashMap::new(),
-            local_storage: LocalStorage::default()
+            local_storage: LocalStorage::default(),
         }
     }
 }

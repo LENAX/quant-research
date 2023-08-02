@@ -4,7 +4,7 @@ use getset::{Getters, MutGetters, Setters};
 use log::{error, info, warn};
 use tokio::sync::{
     broadcast,
-    mpsc::{self, error::TrySendError}
+    mpsc::{self, error::TrySendError},
 };
 use uuid::Uuid;
 
@@ -14,8 +14,6 @@ use super::message_bus::{
     SpmcMessageBusReceiver, SpmcMessageBusSender, StaticClonableAsyncComponent,
     StaticClonableMpscMQ, StaticMpscMQReceiver,
 };
-
-
 
 // TokioMpscMessageBusSender
 #[derive(Clone, Debug, Getters, Setters)]

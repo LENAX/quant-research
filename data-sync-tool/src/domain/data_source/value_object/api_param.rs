@@ -6,8 +6,7 @@ use super::field_type::FieldType;
 use getset::{CopyGetters, Getters, MutGetters, Setters};
 use uuid::Uuid;
 
-
-#[derive(Debug,  PartialEq, Eq, Clone, Getters, Setters, MutGetters, CopyGetters)]
+#[derive(Debug, PartialEq, Eq, Clone, Getters, Setters, MutGetters, CopyGetters)]
 pub struct APIParam {
     #[getset(get = "pub")]
     name: String,

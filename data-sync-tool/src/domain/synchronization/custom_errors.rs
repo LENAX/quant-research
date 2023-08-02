@@ -1,8 +1,7 @@
-use std::error::{Error, self};
+use derivative::Derivative;
+use std::error::{self, Error};
 use std::fmt::{self, Display, Formatter};
 use url::ParseError;
-use derivative::Derivative;
-
 
 #[derive(Debug)]
 pub enum TaskCreationError {
@@ -79,7 +78,9 @@ impl fmt::Display for RepositoryError {
         match *self {
             RepositoryError::ItemNotFound => f.write_str("Item not found"),
             RepositoryError::DuplicateItem => f.write_str("Duplicate item found"),
-            RepositoryError::DatabaseConnectionFailed => f.write_str("Failed to connect to the database"),
+            RepositoryError::DatabaseConnectionFailed => {
+                f.write_str("Failed to connect to the database")
+            }
             RepositoryError::DataSerializationFailed => f.write_str("Failed to serialize data"),
             RepositoryError::PermissionDenied => f.write_str("Permission denied"),
         }
@@ -110,13 +111,11 @@ pub enum TimerError {
 impl fmt::Display for TimerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            TimerError::TimeCountFailedError =>
-                write!(f, "Failed to update time in the timer!"),
+            TimerError::TimeCountFailedError => write!(f, "Failed to update time in the timer!"),
             // The wrapped error contains additional information and is available
             // via the source() method.
             // TODO: Provide better error information
-            TimerError::TimerAlreadyRunningError =>
-                write!(f, "The timer is already running!"),
+            TimerError::TimerAlreadyRunningError => write!(f, "The timer is already running!"),
         }
     }
 }

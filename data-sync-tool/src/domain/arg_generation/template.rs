@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 // use std::collections::HashMap;
 
-#[derive(Debug,  PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct Template {
     id: Uuid,
 }

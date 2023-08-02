@@ -66,7 +66,6 @@ pub fn create_tokio_broadcasting_channel<T: std::clone::Clone>(
     return (sender, receiver);
 }
 
-
 pub type TokioMpscFactory<T> =
     Box<dyn Fn(usize) -> (TokioMpscMessageBusSender<T>, TokioMpscMessageBusReceiver<T>)>;
 pub type TokioSpmcFactory<T> =
@@ -80,11 +79,10 @@ pub type TokioBroadcastingFactory<T> = Box<
     ),
 >;
 
-
 pub enum TokioMQFactory<T> {
     MpscFactory(TokioMpscFactory<T>),
     SpmcFactory(TokioSpmcFactory<T>),
-    BroadcastFactory(TokioBroadcastingFactory<T>)
+    BroadcastFactory(TokioBroadcastingFactory<T>),
 }
 
 type MQFactory<T> =
@@ -108,15 +106,15 @@ pub fn get_tokio_mq_factory<T: std::clone::Clone + 'static>(mq_type: MQType) -> 
         MQType::Mpsc => {
             let factory = create_tokio_mpsc_factory();
             return TokioMQFactory::MpscFactory(factory);
-        },
+        }
         MQType::Spmc => {
             let factory = create_tokio_spmc_factory();
             return TokioMQFactory::SpmcFactory(factory);
-        },
+        }
         MQType::Broadcast => {
             let factory = create_tokio_broadcast_channel_factory();
             return TokioMQFactory::BroadcastFactory(factory);
-        },
+        }
     }
 }
 
@@ -169,7 +167,6 @@ mod tests {
         let channel_size: usize = 10;
         let mpsc_channel_factory =
             get_mq_factory::<Data>(SupportedMQImpl::InMemoryTokioChannel, MQType::Mpsc);
-        let (mpsc_sender,
-             mpsc_receiver) = mpsc_channel_factory(channel_size);
+        let (mpsc_sender, mpsc_receiver) = mpsc_channel_factory(channel_size);
     }
 }

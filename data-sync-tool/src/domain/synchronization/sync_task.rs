@@ -3,11 +3,14 @@
 
 use chrono::prelude::*;
 // use fake::{ Fake};
-use super::{value_objects::task_spec::{TaskSpecification, RequestMethod}, sync_plan::CreateTaskRequest};
+use super::{
+    sync_plan::CreateTaskRequest,
+    value_objects::task_spec::{RequestMethod, TaskSpecification},
+};
 use derivative::Derivative;
 use getset::{Getters, Setters};
-use uuid::Uuid;
 use serde_json::Value;
+use uuid::Uuid;
 
 #[derive(Derivative)]
 #[derivative(Default(bound = ""))]
@@ -60,27 +63,22 @@ impl SyncTask {
         sync_plan_id: Uuid,
     ) -> Self {
         let mut new_task = Self::default();
-        new_task.set_sync_plan_id(Some(sync_plan_id))
-                .set_dataset_id(Some(dataset_id))
-                .set_datasource_id(Some(datasource_id))
-                .set_dataset_name(Some(dataset_name.to_string()))
-                .set_datasource_name(Some(datasource_name.to_string()))
-                .set_spec(task_spec)
-                .set_create_time(Local::now());
+        new_task
+            .set_sync_plan_id(Some(sync_plan_id))
+            .set_dataset_id(Some(dataset_id))
+            .set_datasource_id(Some(datasource_id))
+            .set_dataset_name(Some(dataset_name.to_string()))
+            .set_datasource_name(Some(datasource_name.to_string()))
+            .set_spec(task_spec)
+            .set_create_time(Local::now());
         return new_task;
     }
 
     pub fn is_long_running(&self) -> bool {
         match self.spec().request_method() {
-            RequestMethod::Get => {
-                false
-            }, 
-            RequestMethod::Post =>{
-                false
-            },
-            RequestMethod::Websocket => {
-                true
-            }
+            RequestMethod::Get => false,
+            RequestMethod::Post => false,
+            RequestMethod::Websocket => true,
         }
     }
 
@@ -112,7 +110,6 @@ impl SyncTask {
         self.set_status(SyncStatus::Finished);
         return self.status;
     }
-
 }
 
 #[cfg(test)]

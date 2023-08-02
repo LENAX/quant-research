@@ -1,13 +1,13 @@
-use chrono::{Local};
+use chrono::Local;
 // use chrono::DateTime;
 // use chrono::Local;
-mod infrastructure;
 mod application;
 mod domain;
+mod infrastructure;
 // mod presentation;
 // mod services;
 
-use log::{info, trace, warn, error};
+use log::{error, info, trace, warn};
 
 use env_logger;
 
@@ -21,7 +21,7 @@ fn main() {
 
     log::info!("Connected to the server");
     log::info!("Response HTTP code: {}", response.status());
-    
+
     socket
         .write_message(Message::Text("Hello Echo Test WebSocket".into()))
         .unwrap();

@@ -1,14 +1,17 @@
 use async_trait::async_trait;
 use futures::channel::mpsc::TryRecvError;
-use std::{error::Error, fmt::{Display, Formatter}};
 use std::fmt;
+use std::{
+    error::Error,
+    fmt::{Display, Formatter},
+};
 
 // Errors
 #[derive(Debug)]
 pub enum MessageBusFailureCause {
     Full,
     Closed,
-    Unknown
+    Unknown,
 }
 
 #[derive(Debug)]
@@ -16,7 +19,7 @@ pub enum MessageBusError<T> {
     SendFailed(T, MessageBusFailureCause),
     ReceiveFailed(String),
     SenderClosed,
-    ReceiverClosed
+    ReceiverClosed,
 }
 
 impl<T> Display for MessageBusError<T> {
@@ -30,8 +33,6 @@ impl<T: std::fmt::Debug> Error for MessageBusError<T> {
         None
     }
 }
-
-
 
 // Interfaces
 pub trait StaticMpscMQReceiver: MpscMessageBus + Sync + Send + 'static {}

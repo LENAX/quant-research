@@ -1,2 +1,2 @@
-pub mod template;
 pub mod repository;
+pub mod template;

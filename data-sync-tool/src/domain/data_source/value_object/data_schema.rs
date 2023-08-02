@@ -5,7 +5,7 @@ use std::{collections::HashMap, error::Error, str::FromStr};
 
 use super::field_type::FieldType;
 
-#[derive(Debug,  PartialEq, Eq, Clone, Getters, MutGetters)]
+#[derive(Debug, PartialEq, Eq, Clone, Getters, MutGetters)]
 #[getset(get = "pub")]
 pub struct Column {
     name: String,
@@ -24,7 +24,7 @@ impl Column {
     }
 }
 
-#[derive(Debug,  PartialEq, Eq, Clone, Getters)]
+#[derive(Debug, PartialEq, Eq, Clone, Getters)]
 pub struct DataSchema {
     #[getset(get = "pub", get_mut = "pub")]
     columns: HashMap<String, Column>,

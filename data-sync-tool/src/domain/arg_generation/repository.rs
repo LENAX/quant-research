@@ -1,7 +1,7 @@
 // Interfaces for entity repositories
 
-use async_trait::async_trait;
 use super::template::Template;
+use async_trait::async_trait;
 
 #[async_trait]
 pub trait TemplateRepository: Send + Sync {

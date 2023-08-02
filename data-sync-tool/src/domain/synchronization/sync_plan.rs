@@ -4,10 +4,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use super::{
-    custom_errors::TaskCreationError,
-    sync_task::SyncTask,
-    value_objects::sync_config::{SyncConfig},
-    value_objects::task_spec::{RequestMethod},
+    custom_errors::TaskCreationError, sync_task::SyncTask, value_objects::sync_config::SyncConfig,
+    value_objects::task_spec::RequestMethod,
 };
 use chrono::prelude::*;
 use derivative::Derivative;
@@ -122,8 +120,8 @@ impl SyncPlan {
     }
 
     pub fn create_tasks(
-        & mut self,
-        requests: & [CreateTaskRequest],
+        &mut self,
+        requests: &[CreateTaskRequest],
     ) -> Result<&mut Self, TaskCreationError> {
         for request in requests {
             let mut new_task = SyncTask::from(request);

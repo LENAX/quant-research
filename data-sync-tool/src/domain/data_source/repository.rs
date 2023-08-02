@@ -1,8 +1,7 @@
 // Interfaces for entity repositories
 
-use async_trait::async_trait;
 use super::data_source::DataSource;
-
+use async_trait::async_trait;
 
 #[async_trait]
 pub trait DataSourceRepository: Send + Sync {

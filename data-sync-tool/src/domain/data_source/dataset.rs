@@ -9,7 +9,7 @@ use super::{
     },
 };
 use chrono::prelude::*;
-use fake::{ Fake};
+use fake::Fake;
 use getset::{Getters, MutGetters, Setters};
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -27,7 +27,7 @@ impl fmt::Display for InvalidAPIEndpointFormat {
 }
 impl error::Error for InvalidAPIEndpointFormat {}
 
-#[derive(Debug,  PartialEq, Eq, Clone, Getters, MutGetters, Setters)]
+#[derive(Debug, PartialEq, Eq, Clone, Getters, MutGetters, Setters)]
 pub struct Dataset {
     #[getset(get = "pub", set = "pub")]
     id: Uuid,
@@ -137,18 +137,13 @@ impl Dataset {
 
     pub fn add_api_params(&mut self, api_params: &Vec<APIParam>) -> Result<&mut Self> {
         for api_param in api_params {
-            self.api_params.insert(
-                api_param.name().to_string(),
-                api_param.clone(),
-            );
+            self.api_params
+                .insert(api_param.name().to_string(), api_param.clone());
         }
         return Ok(self);
     }
 
-    pub fn get_api_params_by_name(
-        &self,
-        api_param_name: &Vec<&str>,
-    ) -> HashMap<String, APIParam> {
+    pub fn get_api_params_by_name(&self, api_param_name: &Vec<&str>) -> HashMap<String, APIParam> {
         let mut result_map: HashMap<String, APIParam> = HashMap::new();
         for name in api_param_name {
             if let Some(matched_param) = self.api_params.get(*name) {
@@ -177,8 +172,7 @@ impl Dataset {
     }
 
     pub fn remove_columns_from_schema_by_name(&mut self, column_names: &Vec<String>) -> &mut Self {
-        self.schema_mut()
-            .remove_columns_by_name(column_names);
+        self.schema_mut().remove_columns_by_name(column_names);
         return self;
     }
 

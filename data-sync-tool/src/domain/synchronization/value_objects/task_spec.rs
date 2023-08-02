@@ -1,23 +1,27 @@
 //! Task Specification
 //! Contains the necessary data of performing data synchronization
 
-use std::{str::FromStr, error::Error, string::ParseError, collections::HashMap, hash::Hash, sync::Arc};
+use std::{
+    collections::HashMap, error::Error, hash::Hash, str::FromStr, string::ParseError, sync::Arc,
+};
 
+use derivative::Derivative;
 use getset::{Getters, Setters};
 use serde_json::Value;
-use derivative::Derivative;
 use url::Url;
 
-use crate::domain::synchronization::{custom_errors::RequestMethodParsingError, sync_plan::CreateTaskRequest};
+use crate::domain::synchronization::{
+    custom_errors::RequestMethodParsingError, sync_plan::CreateTaskRequest,
+};
 
 #[derive(Derivative)]
-#[derivative(Default(bound=""))]
+#[derivative(Default(bound = ""))]
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum RequestMethod {
     #[derivative(Default)]
     Get,
     Post,
-    Websocket
+    Websocket,
 }
 
 impl FromStr for RequestMethod {
@@ -39,14 +43,13 @@ impl FromStr for RequestMethod {
     }
 }
 
-
 #[derive(Debug, PartialEq, Eq, Clone, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
 pub struct TaskSpecification {
     request_endpoint: Url,
     request_method: RequestMethod,
     request_header: HashMap<String, String>,
-    payload: Option<Arc<Value>>
+    payload: Option<Arc<Value>>,
 }
 
 impl Default for TaskSpecification {
@@ -55,24 +58,29 @@ impl Default for TaskSpecification {
             request_endpoint: Url::parse("http://localhost/").unwrap(),
             request_method: RequestMethod::Get,
             request_header: HashMap::new(),
-            payload: None
+            payload: None,
         }
     }
 }
 
 impl From<&CreateTaskRequest> for TaskSpecification {
     fn from(value: &CreateTaskRequest) -> Self {
-        Self { 
-            request_endpoint: value.url().clone(), 
-            request_method: value.request_method().clone(), 
-            request_header: value.request_header().clone(), 
-            payload: value.payload().clone()
+        Self {
+            request_endpoint: value.url().clone(),
+            request_method: value.request_method().clone(),
+            request_header: value.request_header().clone(),
+            payload: value.payload().clone(),
         }
     }
 }
 
 impl TaskSpecification {
-    pub fn new(url: &str, request_method: &str, request_header: HashMap<String, String>, payload: Option<Arc<Value>>) -> Result<Self, Box<dyn Error>>  {
+    pub fn new(
+        url: &str,
+        request_method: &str,
+        request_header: HashMap<String, String>,
+        payload: Option<Arc<Value>>,
+    ) -> Result<Self, Box<dyn Error>> {
         let parsed_url = Url::parse(url)?;
         let request_method = RequestMethod::from_str(request_method)?;
 
@@ -80,11 +88,9 @@ impl TaskSpecification {
             request_endpoint: parsed_url,
             request_header,
             request_method,
-            payload
+            payload,
         });
     }
 }
 
-mod test {
-
-}
+mod test {}

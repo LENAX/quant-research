@@ -10,11 +10,18 @@ use std::{
 };
 use tokio::{
     sync::{Mutex, RwLock},
-    time::Instant, task::JoinHandle,
+    task::JoinHandle,
+    time::Instant,
 };
 use uuid::Uuid;
 
-use crate::{domain::synchronization::{rate_limiter::{RateLimitStatus, RateLimiter}, custom_errors::TimerError}, application::synchronization::dtos::task_manager::CreateRateLimiterRequest};
+use crate::{
+    application::synchronization::dtos::task_manager::CreateRateLimiterRequest,
+    domain::synchronization::{
+        custom_errors::TimerError,
+        rate_limiter::{RateLimitStatus, RateLimiter},
+    },
+};
 use derivative::Derivative;
 use getset::{Getters, Setters};
 use log::{error, info};
@@ -39,10 +46,14 @@ impl Error for InvalidLimitError {
 // TODO: add an abstract factory method to provide an unified interface for all rate limiter factories
 #[derive(Debug, Clone, Copy)]
 pub enum RateLimiterImpls {
-    WebRequestRateLimiter
+    WebRequestRateLimiter,
 }
 
-pub fn new_web_request_limiter(max_request: i64, max_daily_request: Option<i64>, cooldown: Option<i64>) -> WebRequestRateLimiter {
+pub fn new_web_request_limiter(
+    max_request: i64,
+    max_daily_request: Option<i64>,
+    cooldown: Option<i64>,
+) -> WebRequestRateLimiter {
     return WebRequestRateLimiter::new(max_request, max_daily_request, cooldown).unwrap();
 }
 
@@ -91,7 +102,10 @@ impl RateLimiter for WebRequestRateLimiter {
                 // if the timer is not activated, or the caller explicitly asks to reset the timer
                 let cool_down_second_lock = self.cool_down_seconds.write().await;
                 *count_down_lock = Some(Duration::seconds(*cool_down_second_lock));
-                info!("In RateLimiter {}, countdown: {:?}", self.id, count_down_lock);
+                info!(
+                    "In RateLimiter {}, countdown: {:?}",
+                    self.id, count_down_lock
+                );
             }
         }
         let count_down_clone = Arc::clone(&self.count_down);
@@ -112,14 +126,18 @@ impl RateLimiter for WebRequestRateLimiter {
                         *count_down = updated_count_down;
                         info!("In RateLimiter {}, Time left: {}", limiter_id, *count_down);
                         if *count_down <= Duration::seconds(0) {
-                            info!("In RateLimiter {}, time is up! Counting down: {}", limiter_id, *count_down);
+                            info!(
+                                "In RateLimiter {}, time is up! Counting down: {}",
+                                limiter_id, *count_down
+                            );
                             drop(count_down_lock); // break out of the loop when the count down is reached.
-                            
+
                             // Then recover the limit
                             info!("try to recover the limit...");
                             let max_minute_request_lock = max_minute_request_clone.read().await;
                             info!("max_minute_request_lock acquired...");
-                            let mut remaining_minute_requests_lock = remaining_minute_request_clone.lock().await;
+                            let mut remaining_minute_requests_lock =
+                                remaining_minute_request_clone.lock().await;
                             info!("remaining_minute_requests_lock acquired...");
                             *remaining_minute_requests_lock = *max_minute_request_lock;
                             info!("remaining_minute resetted...");
@@ -127,7 +145,10 @@ impl RateLimiter for WebRequestRateLimiter {
                             break;
                         }
                     } else {
-                        error!("In RateLimiter {}, Failed to update count down!", limiter_id);
+                        error!(
+                            "In RateLimiter {}, Failed to update count down!",
+                            limiter_id
+                        );
                         return;
                     }
                 }
@@ -151,7 +172,7 @@ impl RateLimiter for WebRequestRateLimiter {
                 }
             }
         }
-        
+
         // Check whether countdown is activated
         let mut count_down_activated = true;
 
@@ -162,34 +183,36 @@ impl RateLimiter for WebRequestRateLimiter {
             if let Some(countdown) = *count_down_lock {
                 // count down is activated
                 if countdown.num_seconds() > 0 {
-                    return RateLimitStatus::RequestPerMinuteExceeded(false, countdown.num_seconds());
+                    return RateLimitStatus::RequestPerMinuteExceeded(
+                        false,
+                        countdown.num_seconds(),
+                    );
                 }
-                
-                if countdown.num_seconds() <= 0{
+
+                if countdown.num_seconds() <= 0 {
                     info!("Countdown is over! second: {}", countdown.num_seconds());
                     // reset the count down to none and allow to send request
                     *count_down_lock = None;
                     count_down_activated = false;
-                }    
+                }
             }
         }
-        
+
         if !count_down_activated {
             info!("Count down is deactivated. Immediately allow one request!");
             // reset the remaining_minute_requests
-            let mut remaining_minute_requests_lock =
-                self.remaining_minute_requests.lock().await;
+            let mut remaining_minute_requests_lock = self.remaining_minute_requests.lock().await;
             let max_minute_request_lock = self.max_minute_request.read().await;
             *remaining_minute_requests_lock = *max_minute_request_lock - 1; // immediately allow one request
-            
+
             // set last request time
             let mut last_requst_time_lock = self.last_request_time.lock().await;
             *last_requst_time_lock = Some(Local::now()); // update last_request_time
-            
+
             // allow the request
             return RateLimitStatus::Ok(*remaining_minute_requests_lock as u64);
         }
-        
+
         {
             info!("Countdown is not activated. Proceed as normal");
             let mut remaining_minute_requests_lock = self.remaining_minute_requests.lock().await;
@@ -244,18 +267,20 @@ impl WebRequestRateLimiter {
     }
 }
 
-
 #[cfg(test)]
-mod test{
-    use std::{error::Error, sync::Arc, cell::RefCell, env};
+mod test {
     use futures::future::join_all;
+    use std::{cell::RefCell, env, error::Error, sync::Arc};
 
     // use log::info;
 
     use log::info;
-    use tokio::{sync::Mutex, join, task::{JoinHandle}};
+    use tokio::{join, sync::Mutex, task::JoinHandle};
 
-    use crate::{infrastructure::sync::sync_rate_limiter::WebRequestRateLimiter, domain::synchronization::rate_limiter::{RateLimiter, RateLimitStatus}};
+    use crate::{
+        domain::synchronization::rate_limiter::{RateLimitStatus, RateLimiter},
+        infrastructure::sync::sync_rate_limiter::WebRequestRateLimiter,
+    };
 
     fn init_logger() {
         env::set_var("RUST_LOG", "info");
@@ -266,9 +291,9 @@ mod test{
     async fn it_should_count_remaining_time_as_expected() {
         init_logger();
         info!("Start timer test");
-        let mut web_rate_limiter = Arc::new(Mutex::new(WebRequestRateLimiter::new(
-            10, None, Some(3)
-        ).unwrap()));
+        let mut web_rate_limiter = Arc::new(Mutex::new(
+            WebRequestRateLimiter::new(10, None, Some(3)).unwrap(),
+        ));
         let limiter_clone = web_rate_limiter.clone();
         let rate_limiter_task = tokio::spawn(async move {
             for i in 0..100 {
@@ -279,17 +304,19 @@ mod test{
                 match apply_response {
                     RateLimitStatus::Ok(remaining_count) => {
                         info!("Rate limiter {} permits this request, and there are {} available requests left", limiter_id, remaining_count);
-                    },
+                    }
                     RateLimitStatus::RequestPerDayExceeded => {
                         info!("Oh no! Rate limiter {} rejects this request because daily limit is reached!", limiter_id);
-                    },
-                    RateLimitStatus::RequestPerMinuteExceeded(should_start_timer, remaining_seconds) => {
+                    }
+                    RateLimitStatus::RequestPerMinuteExceeded(
+                        should_start_timer,
+                        remaining_seconds,
+                    ) => {
                         if should_start_timer {
                             let mut limiter_lock = limiter_clone.lock().await;
                             let task = limiter_lock.start_countdown(true).await;
 
                             if let Ok(join_handle) = task {
-                                
                                 // let mut handles_lock = handle_clone.lock().await;
                                 let _ = join!(join_handle);
                             }
@@ -298,23 +325,33 @@ mod test{
                     }
                 }
             }
-            
         });
         // let mut handles_lock = handles.lock().await;
         let _ = join!(rate_limiter_task);
-        
     }
 
     #[tokio::test]
     async fn it_should_run_several_limiters_concurrenly() {
         init_logger();
         let limiters = vec![
-            Arc::new(Mutex::new(WebRequestRateLimiter::new(5, None, Some(1)).unwrap())),
-            Arc::new(Mutex::new(WebRequestRateLimiter::new(10, None, Some(3)).unwrap())),
-            Arc::new(Mutex::new(WebRequestRateLimiter::new(15, None, Some(5)).unwrap())),
-            Arc::new(Mutex::new(WebRequestRateLimiter::new(20, None, Some(7)).unwrap())),
-            Arc::new(Mutex::new(WebRequestRateLimiter::new(25, None, Some(9)).unwrap())),
-            Arc::new(Mutex::new(WebRequestRateLimiter::new(30, None, Some(11)).unwrap())),
+            Arc::new(Mutex::new(
+                WebRequestRateLimiter::new(5, None, Some(1)).unwrap(),
+            )),
+            Arc::new(Mutex::new(
+                WebRequestRateLimiter::new(10, None, Some(3)).unwrap(),
+            )),
+            Arc::new(Mutex::new(
+                WebRequestRateLimiter::new(15, None, Some(5)).unwrap(),
+            )),
+            Arc::new(Mutex::new(
+                WebRequestRateLimiter::new(20, None, Some(7)).unwrap(),
+            )),
+            Arc::new(Mutex::new(
+                WebRequestRateLimiter::new(25, None, Some(9)).unwrap(),
+            )),
+            Arc::new(Mutex::new(
+                WebRequestRateLimiter::new(30, None, Some(11)).unwrap(),
+            )),
         ];
         let tasks = limiters.into_iter().map(|limiter| {
             let limiter_clone = limiter.clone();
@@ -334,11 +371,8 @@ mod test{
                         RateLimitStatus::RequestPerMinuteExceeded(should_start_timer, remaining_seconds) => {
                             if should_start_timer {
                                 let mut limiter_lock = limiter_clone.lock().await;
-
                                 let task = limiter_lock.start_countdown(true).await;
-    
                                 if let Ok(join_handle) = task {
-                                    
                                     // let mut handles_lock = handle_clone.lock().await;
                                     let _ = join!(join_handle);
                                 }
@@ -347,7 +381,6 @@ mod test{
                         }
                     }
                 }
-                
             });
             rate_limiter_task
         }).collect::<Vec<JoinHandle<_>>>();

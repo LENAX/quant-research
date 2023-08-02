@@ -12,15 +12,14 @@ impl fmt::Display for InvalidFieldType {
 }
 impl error::Error for InvalidFieldType {}
 
-
-#[derive(Debug,  PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum FieldType {
     String,
     Int,
     Float,
     Double,
     Datetime,
-    Date
+    Date,
 }
 
 impl FromStr for FieldType {
@@ -29,12 +28,14 @@ impl FromStr for FieldType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "str" | "String" | "string" | "STRING" | "Str" | "STR" => Ok(FieldType::String),
-            "int" | "Int" | "Integer" | "INT" | "integer" | "i32" | "i64" | "uint" => Ok(FieldType::Int),
+            "int" | "Int" | "Integer" | "INT" | "integer" | "i32" | "i64" | "uint" => {
+                Ok(FieldType::Int)
+            }
             "float" | "Float" | "FLOAT" => Ok(FieldType::Float),
             "double" | "Double" => Ok(FieldType::Double),
             "datetime" | "Datetime" => Ok(FieldType::Datetime),
             "Date" | "date" => Ok(FieldType::Date),
-            _ => Err(InvalidFieldType)
+            _ => Err(InvalidFieldType),
         }
     }
 }

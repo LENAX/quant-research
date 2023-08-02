@@ -11,11 +11,11 @@ use crate::{
     application::synchronization::dtos::task_manager::CreateTaskManagerRequest,
     domain::synchronization::{rate_limiter::RateLimiter, sync_task::SyncTask},
     infrastructure::mq::{
-        factory::{get_tokio_mq_factory, TokioMQFactory},
+        factory::{get_tokio_mq_factory, TokioMQFactory, create_tokio_mpsc_channel, create_tokio_spmc_channel, create_tokio_broadcasting_channel},
         message_bus::{MessageBusSender, StaticClonableMpscMQ},
         tokio_channel_mq::{
             TokioMpscMessageBusReceiver, TokioMpscMessageBusSender, TokioSpmcMessageBusReceiver,
-            TokioSpmcMessageBusSender,
+            TokioSpmcMessageBusSender, TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
         },
     },
 };
@@ -31,8 +31,78 @@ use super::{
     task_manager::{
         create_sync_task_manager, QueueId, SyncTaskManager, TaskManager, TaskManagerError,
     },
-    worker::{LongRunningWorker, ShortTaskHandlingWorker, SyncWorker},
+    worker::{LongRunningWorker, ShortTaskHandlingWorker, SyncWorker, WebAPISyncWorker, WebsocketSyncWorker, SyncWorkerData, SyncWorkerMessage, SyncWorkerErrorMessage, create_websocket_sync_workers, create_web_api_sync_workers},
 };
+
+type TokioExecutorChannels = (
+    TokioMpscMessageBusReceiver<SyncWorkerData>,
+    TokioBroadcastingMessageBusSender<SyncWorkerMessage>,
+    TokioMpscMessageBusReceiver<SyncWorkerErrorMessage>,
+    TokioMpscMessageBusReceiver<SyncTask>,
+    TokioMpscMessageBusReceiver<TaskManagerError>,
+    TokioSpmcMessageBusSender<(Uuid, SyncTask)>
+);
+
+
+pub fn create_tokio_task_executor(n_workers: usize, channel_size: usize, create_tm_request: &CreateTaskManagerRequest) -> (
+    SyncTaskExecutor<
+        WebsocketSyncWorker<
+            TokioMpscMessageBusSender<SyncWorkerData>,
+            TokioBroadcastingMessageBusReceiver<SyncWorkerMessage>,
+            TokioMpscMessageBusSender<SyncWorkerErrorMessage>
+        >,
+        WebAPISyncWorker,
+        TaskManager<
+            WebRequestRateLimiter,
+            TokioMpscMessageBusSender<SyncTask>,
+            TokioMpscMessageBusSender<TaskManagerError>,
+            TokioSpmcMessageBusReceiver<(Uuid, SyncTask)>
+        >
+    >,
+    TokioExecutorChannels
+) {
+    // create message bus channels
+    let (task_sender, task_receiver) = create_tokio_mpsc_channel::<SyncTask>(channel_size);
+    let (error_sender, error_receiver) = create_tokio_mpsc_channel::<TaskManagerError>(channel_size);
+    let (failed_task_sender, failed_task_receiver) = create_tokio_spmc_channel::<(Uuid, SyncTask)>(channel_size);
+    let (sync_worker_message_sender, sync_worker_message_receiver) = create_tokio_broadcasting_channel::<SyncWorkerMessage>(channel_size);
+    let (sync_worker_data_sender, sync_worker_data_receiver) = create_tokio_mpsc_channel::<SyncWorkerData>(channel_size);
+    let (sync_worker_error_sender, sync_worker_error_receiver) = create_tokio_mpsc_channel::<SyncWorkerErrorMessage>(channel_size);
+
+    // create workers
+    let long_running_workers = create_websocket_sync_workers(
+        n_workers,
+        sync_worker_data_sender.clone(),
+        sync_worker_message_receiver.clone(),
+        sync_worker_error_sender.clone()
+    );
+    let short_running_workers = create_web_api_sync_workers(n_workers);
+
+    // create task manager
+    let task_manager = create_sync_task_manager(
+        create_tm_request,
+        task_sender,
+        error_sender,
+        failed_task_receiver,
+    );
+
+    // create task executor
+    let task_executor = SyncTaskExecutor {
+        long_running_workers,
+        short_task_handling_workers: short_running_workers,
+        task_manager,
+    };
+
+    (
+        task_executor,
+        (sync_worker_data_receiver,
+         sync_worker_message_sender,
+         sync_worker_error_receiver,
+         task_receiver,
+         error_receiver,
+         failed_task_sender,)
+    )
+}
 
 #[derive(Derivative, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
@@ -42,57 +112,5 @@ pub struct SyncTaskExecutor<LW, SW, TM> {
     task_manager: TM,
 }
 
-fn init_task_executor<LW, SW, TM>(
-    long_running_workers: Vec<LW>,
-    short_running_workers: Vec<SW>,
-    task_sender: TokioMpscMessageBusSender<SyncTask>,
-    error_sender: TokioMpscMessageBusSender<TaskManagerError>,
-    failed_task_receiver: TokioSpmcMessageBusReceiver<(Uuid, SyncTask)>,
-    create_tm_request: &CreateTaskManagerRequest,
-) -> SyncTaskExecutor<
-    LW,
-    SW,
-    TaskManager<
-        WebRequestRateLimiter,
-        TokioMpscMessageBusSender<SyncTask>,
-        TokioMpscMessageBusSender<TaskManagerError>,
-        TokioSpmcMessageBusReceiver<(Uuid, SyncTask)>,
-    >,
-> {
-    let task_manager = create_sync_task_manager(
-        create_tm_request,
-        task_sender,
-        error_sender,
-        failed_task_receiver,
-    );
-    let task_executor: SyncTaskExecutor<
-        LW,
-        SW,
-        TaskManager<
-            super::sync_rate_limiter::WebRequestRateLimiter,
-            TokioMpscMessageBusSender<SyncTask>,
-            TokioMpscMessageBusSender<TaskManagerError>,
-            TokioSpmcMessageBusReceiver<(Uuid, SyncTask)>,
-        >,
-    > = SyncTaskExecutor {
-        long_running_workers,
-        short_task_handling_workers: short_running_workers,
-        task_manager,
-    };
-    return task_executor;
-}
 
-impl<LW, SW, TM> SyncTaskExecutor<LW, SW, TM>
-where
-    LW: SyncWorker + LongRunningWorker,
-    SW: SyncWorker + ShortTaskHandlingWorker,
-    TM: SyncTaskManager,
-{
-    pub fn new(
-        n_long_running_workers: usize,
-        n_short_running_workers: usize,
-        create_tm_request: CreateTaskManagerRequest,
-    ) -> Self {
-        todo!()
-    }
-}
+

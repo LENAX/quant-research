@@ -68,10 +68,12 @@ pub trait SyncWorker: Send + Sync {
 }
 
 /// A marker trait that marks a long running worker
-pub trait LongRunningWorker {}
+pub trait LongTaskHandlingWorker {}
 
 /// A market trait for workers handling short tasks
 pub trait ShortTaskHandlingWorker {}
+pub trait ShortRunningWorker: SyncWorker + ShortTaskHandlingWorker {}
+pub trait LongRunningWorker: SyncWorker + LongTaskHandlingWorker {} 
 
 fn build_headers(header_map: &HashMap<String, String>) -> HeaderMap {
     let header: HeaderMap = header_map
@@ -122,13 +124,53 @@ fn build_request(
     }
 }
 
-pub fn create_long_running_workers<LW: SyncWorker + LongRunningWorker>(n: u32) -> Vec<LW> {
-    todo!()
+pub fn create_websocket_sync_workers<MD, MW, ME>(
+    n: usize,
+    data_sender: MD,
+    worker_command_receiver: MW,
+    error_sender: ME
+) -> Vec<WebsocketSyncWorker<MD, MW, ME>> 
+where
+    MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ + Clone,
+    MW: MessageBusReceiver<SyncWorkerMessage>
+        + StaticClonableAsyncComponent
+        + BroadcastingMessageBusReceiver + Clone,
+    ME: MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ + Clone,
+{
+    let mut workers = Vec::new();
+    for _ in 0..n {
+        let new_worker = WebsocketSyncWorker::new(
+            data_sender.clone(),
+            worker_command_receiver.clone(),
+            error_sender.clone(),
+        );
+        workers.push(new_worker);
+    };
+    workers
 }
 
-pub fn create_short_running_workers<SW: SyncWorker + ShortTaskHandlingWorker>(n: u32) -> Vec<SW> {
-    todo!()
+pub fn create_web_api_sync_workers(n: usize) -> Vec<WebAPISyncWorker> {
+    let mut workers = Vec::new();
+    
+    for _ in 0..n {
+        let http_client = Client::new();
+        let new_worker = WebAPISyncWorker::new(http_client);
+        workers.push(new_worker);
+    };
+    workers
 }
+
+pub fn create_short_running_workers(n: usize) -> Vec<Box<dyn ShortRunningWorker>> {
+    let mut workers: Vec<Box<dyn ShortRunningWorker>> = Vec::new();
+    
+    for _ in 0..n {
+        let http_client = Client::new();
+        let new_worker = WebAPISyncWorker::new(http_client);
+        workers.push(Box::new(new_worker));
+    };
+    workers
+}
+
 
 #[derive(Derivative, PartialEq, Eq)]
 #[derivative(Default(bound = ""))]
@@ -148,6 +190,7 @@ pub struct WebAPISyncWorker {
 
 /// WebAPISyncWorker is a ShortTaskHandlingWorker
 impl ShortTaskHandlingWorker for WebAPISyncWorker {}
+impl ShortRunningWorker for WebAPISyncWorker {}
 
 #[async_trait]
 impl SyncWorker for WebAPISyncWorker {
@@ -239,7 +282,7 @@ pub struct WebsocketSyncWorker<MD, MW, ME> {
 }
 
 /// WebsocketSyncWorker is a long running work
-impl<MD, MW, ME> LongRunningWorker for WebsocketSyncWorker<MD, MW, ME>
+impl<MD, MW, ME> LongTaskHandlingWorker for WebsocketSyncWorker<MD, MW, ME>
 where
     MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ,
     MW: MessageBusReceiver<SyncWorkerMessage>
@@ -248,6 +291,7 @@ where
     ME: MessageBusReceiver<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
 {
 }
+
 
 impl<MD, MW, ME> WebsocketSyncWorker<MD, MW, ME>
 where
@@ -445,6 +489,7 @@ where
         }
     }
 }
+
 
 #[cfg(test)]
 mod tests {

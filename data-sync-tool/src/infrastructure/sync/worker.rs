@@ -73,7 +73,7 @@ pub trait LongTaskHandlingWorker {}
 /// A market trait for workers handling short tasks
 pub trait ShortTaskHandlingWorker {}
 pub trait ShortRunningWorker: SyncWorker + ShortTaskHandlingWorker {}
-pub trait LongRunningWorker: SyncWorker + LongTaskHandlingWorker {} 
+pub trait LongRunningWorker: SyncWorker + LongTaskHandlingWorker {}
 
 fn build_headers(header_map: &HashMap<String, String>) -> HeaderMap {
     let header: HeaderMap = header_map
@@ -128,13 +128,14 @@ pub fn create_websocket_sync_workers<MD, MW, ME>(
     n: usize,
     data_sender: MD,
     worker_command_receiver: MW,
-    error_sender: ME
-) -> Vec<WebsocketSyncWorker<MD, MW, ME>> 
+    error_sender: ME,
+) -> Vec<WebsocketSyncWorker<MD, MW, ME>>
 where
     MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ + Clone,
     MW: MessageBusReceiver<SyncWorkerMessage>
         + StaticClonableAsyncComponent
-        + BroadcastingMessageBusReceiver + Clone,
+        + BroadcastingMessageBusReceiver
+        + Clone,
     ME: MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ + Clone,
 {
     let mut workers = Vec::new();
@@ -145,32 +146,31 @@ where
             error_sender.clone(),
         );
         workers.push(new_worker);
-    };
+    }
     workers
 }
 
 pub fn create_web_api_sync_workers(n: usize) -> Vec<WebAPISyncWorker> {
     let mut workers = Vec::new();
-    
+
     for _ in 0..n {
         let http_client = Client::new();
         let new_worker = WebAPISyncWorker::new(http_client);
         workers.push(new_worker);
-    };
+    }
     workers
 }
 
 pub fn create_short_running_workers(n: usize) -> Vec<Box<dyn ShortRunningWorker>> {
     let mut workers: Vec<Box<dyn ShortRunningWorker>> = Vec::new();
-    
+
     for _ in 0..n {
         let http_client = Client::new();
         let new_worker = WebAPISyncWorker::new(http_client);
         workers.push(Box::new(new_worker));
-    };
+    }
     workers
 }
-
 
 #[derive(Derivative, PartialEq, Eq)]
 #[derivative(Default(bound = ""))]
@@ -291,7 +291,6 @@ where
     ME: MessageBusReceiver<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
 {
 }
-
 
 impl<MD, MW, ME> WebsocketSyncWorker<MD, MW, ME>
 where
@@ -489,7 +488,6 @@ where
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

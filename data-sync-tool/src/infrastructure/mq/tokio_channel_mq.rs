@@ -11,8 +11,8 @@ use uuid::Uuid;
 use super::message_bus::{
     BroadcastingMessageBusReceiver, BroadcastingMessageBusSender, MessageBusError,
     MessageBusFailureCause, MessageBusReceiver, MessageBusSender, MpscMessageBus,
-    SpmcMessageBusReceiver, SpmcMessageBusSender, StaticClonableAsyncComponent,
-    StaticClonableMpscMQ, StaticMpscMQReceiver, StaticMpscMQSender, StaticAsyncComponent,
+    SpmcMessageBusReceiver, SpmcMessageBusSender, StaticAsyncComponent,
+    StaticClonableAsyncComponent, StaticClonableMpscMQ, StaticMpscMQReceiver, StaticMpscMQSender,
 };
 
 // TokioMpscMessageBusSender
@@ -34,12 +34,15 @@ impl<T: std::marker::Send + std::marker::Sync + std::fmt::Debug> MpscMessageBus
 {
 }
 
-impl<T: std::marker::Send + std::marker::Sync + std::fmt::Debug + 'static>
-    StaticMpscMQSender for TokioMpscMessageBusSender<T>
+impl<T: std::marker::Send + std::marker::Sync + std::fmt::Debug + 'static> StaticMpscMQSender
+    for TokioMpscMessageBusSender<T>
 {
 }
 
-impl<T: 'static + Send + Clone + std::marker::Sync + Debug> StaticClonableMpscMQ for TokioMpscMessageBusSender<T> {}
+impl<T: 'static + Send + Clone + std::marker::Sync + Debug> StaticClonableMpscMQ
+    for TokioMpscMessageBusSender<T>
+{
+}
 impl<T: 'static + Send> StaticAsyncComponent for TokioMpscMessageBusSender<T> {}
 impl<T: 'static + Send> StaticAsyncComponent for TokioMpscMessageBusReceiver<T> {}
 
@@ -184,9 +187,6 @@ impl<T> TokioSpmcMessageBusSender<T> {
     }
 }
 
-
-
-
 impl<T: std::clone::Clone + std::marker::Send + 'static> SpmcMessageBusSender<T>
     for TokioSpmcMessageBusSender<T>
 {
@@ -209,7 +209,10 @@ impl<T: std::clone::Clone + std::marker::Send + 'static> SpmcMessageBusSender<T>
         }
     }
 
-    fn same_channel(&self, other: &dyn SpmcMessageBusSender<T>) -> Result<bool, MessageBusError<T>> {
+    fn same_channel(
+        &self,
+        other: &dyn SpmcMessageBusSender<T>,
+    ) -> Result<bool, MessageBusError<T>> {
         // self.sender.same_channel(&other.sender)
         if let Some(inner_sender) = self.sender() {
             if other.is_closed() {
@@ -235,7 +238,6 @@ impl<T: std::clone::Clone + std::marker::Send + 'static> SpmcMessageBusSender<T>
 }
 
 impl<T: 'static + Send + Sync> StaticAsyncComponent for TokioSpmcMessageBusSender<T> {}
-
 
 #[async_trait]
 impl<T> MessageBusSender<T> for TokioSpmcMessageBusSender<T>
@@ -323,7 +325,6 @@ impl<T: Clone> TokioSpmcMessageBusReceiver<T> {
 }
 
 impl<T: 'static + Send + Sync> StaticAsyncComponent for TokioSpmcMessageBusReceiver<T> {}
-
 
 impl<T: std::clone::Clone + std::marker::Send + std::marker::Sync + std::fmt::Debug + 'static>
     StaticClonableAsyncComponent for TokioSpmcMessageBusReceiver<T>
@@ -487,7 +488,10 @@ impl<T: std::clone::Clone + std::marker::Send + 'static> BroadcastingMessageBusS
         }
     }
 
-    fn same_channel(&self, other: &dyn BroadcastingMessageBusSender<T>) -> Result<bool, MessageBusError<T>> {
+    fn same_channel(
+        &self,
+        other: &dyn BroadcastingMessageBusSender<T>,
+    ) -> Result<bool, MessageBusError<T>> {
         // self.sender.same_channel(&other.sender)
         if let Some(inner_sender) = self.sender() {
             if other.is_closed() {
@@ -506,8 +510,8 @@ impl<T: std::clone::Clone + std::marker::Send + 'static> BroadcastingMessageBusS
     fn inner(&self) -> Option<&broadcast::Sender<T>> {
         let sender = self.inner_sender();
         match sender {
-            Ok(s) => { Some(s) },
-            Err(e) => { None }
+            Ok(s) => Some(s),
+            Err(e) => None,
         }
     }
 
@@ -574,7 +578,10 @@ impl<T: std::clone::Clone + std::marker::Send + std::marker::Sync + std::fmt::De
 {
 }
 
-impl<T: std::marker::Send + 'static> StaticAsyncComponent for TokioBroadcastingMessageBusReceiver<T> {}
+impl<T: std::marker::Send + 'static> StaticAsyncComponent
+    for TokioBroadcastingMessageBusReceiver<T>
+{
+}
 impl<T> BroadcastingMessageBusReceiver for TokioBroadcastingMessageBusReceiver<T> {}
 
 impl<T: Clone> Clone for TokioBroadcastingMessageBusReceiver<T> {

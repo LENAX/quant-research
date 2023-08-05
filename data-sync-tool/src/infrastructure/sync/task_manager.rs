@@ -45,7 +45,10 @@ use crate::{
     },
 };
 
-use super::{sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter}, worker::SyncWorkerDataMPSCReceiver};
+use super::{
+    sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter},
+    worker::SyncWorkerDataMPSCReceiver,
+};
 
 pub type QueueId = Uuid;
 type CooldownTimerTask = JoinHandle<()>;
@@ -274,7 +277,6 @@ trait SyncTaskMpscReceiver: MessageBusReceiver<SyncTask> + StaticMpscMQReceiver 
 impl SyncTaskMpscSender for TokioMpscMessageBusSender<SyncTask> {}
 impl SyncTaskMpscReceiver for TokioMpscMessageBusReceiver<SyncTask> {}
 
-
 pub trait SyncTaskMPSCSender:
     MessageBusSender<SyncTask> + MpscMessageBus + StaticAsyncComponent
 {
@@ -288,7 +290,9 @@ impl SyncTaskMPSCSender for TokioMpscMessageBusSender<SyncTask> {
 }
 
 pub trait SyncTaskMPSCReceiver:
-    MessageBusReceiver<SyncTask> + MpscMessageBus + StaticAsyncComponent {}
+    MessageBusReceiver<SyncTask> + MpscMessageBus + StaticAsyncComponent
+{
+}
 
 impl SyncTaskMPSCReceiver for TokioMpscMessageBusReceiver<SyncTask> {}
 
@@ -306,14 +310,17 @@ impl TaskManagerErrorMPSCSender for TokioMpscMessageBusSender<TaskManagerError> 
 }
 
 trait TaskManagerErrorMpscReceiver:
-    MessageBusReceiver<TaskManagerError> + StaticMpscMQReceiver {}
+    MessageBusReceiver<TaskManagerError> + StaticMpscMQReceiver
+{
+}
 
 impl TaskManagerErrorMpscSender for TokioMpscMessageBusSender<TaskManagerError> {}
 impl TaskManagerErrorMpscReceiver for TokioMpscMessageBusReceiver<TaskManagerError> {}
 
-
 pub trait TaskManagerErrorMPSCReceiver:
-    MessageBusReceiver<TaskManagerError> + MpscMessageBus + StaticAsyncComponent {}
+    MessageBusReceiver<TaskManagerError> + MpscMessageBus + StaticAsyncComponent
+{
+}
 
 impl TaskManagerErrorMPSCReceiver for TokioMpscMessageBusReceiver<TaskManagerError> {}
 
@@ -331,7 +338,6 @@ trait FailedTaskSpmcSender:
 impl FailedTaskSpmcReceiver for TokioSpmcMessageBusReceiver<FailedTask> {}
 impl FailedTaskSpmcSender for TokioSpmcMessageBusSender<FailedTask> {}
 
-
 pub trait FailedTaskSPMCReceiver:
     MessageBusReceiver<FailedTask> + StaticAsyncComponent + SpmcMessageBusReceiver
 {
@@ -346,10 +352,10 @@ impl FailedTaskSPMCReceiver for TokioSpmcMessageBusReceiver<FailedTask> {
 
 pub trait FailedTaskSPMCSender:
     MessageBusSender<FailedTask> + StaticAsyncComponent + SpmcMessageBusSender<FailedTask>
-{}
+{
+}
 
 impl FailedTaskSPMCSender for TokioSpmcMessageBusSender<FailedTask> {}
-
 
 /// TaskManager
 #[derive(Derivative, Getters, Setters, Default)]

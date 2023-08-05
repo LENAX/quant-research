@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use futures::channel::mpsc::TryRecvError;
-use tokio::sync::broadcast;
 use std::fmt;
 use std::{
     error::Error,
     fmt::{Display, Formatter},
 };
+use tokio::sync::broadcast;
 
 // Errors
 #[derive(Debug)]
@@ -94,7 +94,8 @@ pub trait BroadcastingMessageBusReceiver {}
 pub trait SpmcMessageBusSender<T> {
     fn subscribe(&self) -> Result<Box<dyn MessageBusReceiver<T>>, MessageBusError<T>>;
     fn receiver_count(&self) -> Result<usize, MessageBusError<T>>;
-    fn same_channel(&self, other: &dyn SpmcMessageBusSender<T>) -> Result<bool, MessageBusError<T>>;
+    fn same_channel(&self, other: &dyn SpmcMessageBusSender<T>)
+        -> Result<bool, MessageBusError<T>>;
     fn is_closed(&self) -> bool;
     fn sender(&self) -> Option<&broadcast::Sender<T>>;
 }

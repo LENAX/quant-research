@@ -28,11 +28,17 @@ use crate::{
         sync_task::{SyncStatus, SyncTask},
         value_objects::task_spec::RequestMethod,
     },
-    infrastructure::mq::{message_bus::{
-        BroadcastingMessageBusReceiver, BroadcastingMessageBusSender, MessageBus,
-        MessageBusReceiver, MessageBusSender, MpscMessageBus, StaticAsyncComponent,
-        StaticClonableAsyncComponent, StaticClonableMpscMQ, StaticMpscMQReceiver,
-    }, tokio_channel_mq::{TokioMpscMessageBusSender, TokioBroadcastingMessageBusReceiver, TokioMpscMessageBusReceiver, TokioBroadcastingMessageBusSender}},
+    infrastructure::mq::{
+        message_bus::{
+            BroadcastingMessageBusReceiver, BroadcastingMessageBusSender, MessageBus,
+            MessageBusReceiver, MessageBusSender, MpscMessageBus, StaticAsyncComponent,
+            StaticClonableAsyncComponent, StaticClonableMpscMQ, StaticMpscMQReceiver,
+        },
+        tokio_channel_mq::{
+            TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
+            TokioMpscMessageBusReceiver, TokioMpscMessageBusSender,
+        },
+    },
 };
 
 #[derive(Derivative, Debug)]
@@ -129,12 +135,18 @@ pub trait SyncWorkerMessageMPMCSender:
 }
 
 pub trait SyncWorkerDataMPSCReceiver:
-    MessageBusReceiver<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent {}
+    MessageBusReceiver<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent
+{
+}
 pub trait SyncWorkerDataMPSCSender:
-    MessageBusSender<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent {}
+    MessageBusSender<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent
+{
+}
 
 pub trait SyncWorkerErrorMessageMPSCReceiver:
-    MessageBusReceiver<SyncWorkerErrorMessage> + MpscMessageBus + StaticAsyncComponent {}
+    MessageBusReceiver<SyncWorkerErrorMessage> + MpscMessageBus + StaticAsyncComponent
+{
+}
 
 pub trait SyncWorkerErrorMessageMPSCSender:
     MessageBusSender<SyncWorkerErrorMessage> + MpscMessageBus + StaticAsyncComponent
@@ -142,7 +154,9 @@ pub trait SyncWorkerErrorMessageMPSCSender:
     fn clone_boxed(&self) -> Box<dyn SyncWorkerErrorMessageMPSCSender>;
 }
 
-impl SyncWorkerMessageBroadcastingReceiver for TokioBroadcastingMessageBusReceiver<SyncWorkerMessage> {
+impl SyncWorkerMessageBroadcastingReceiver
+    for TokioBroadcastingMessageBusReceiver<SyncWorkerMessage>
+{
     // Implement the required methods
 }
 
@@ -168,7 +182,6 @@ impl SyncWorkerMessageMPMCSender for TokioBroadcastingMessageBusSender<SyncWorke
     }
 }
 impl SyncWorkerErrorMessageMPSCReceiver for TokioMpscMessageBusReceiver<SyncWorkerErrorMessage> {}
-
 
 // Factory Methods
 fn build_headers(header_map: &HashMap<String, String>) -> HeaderMap {

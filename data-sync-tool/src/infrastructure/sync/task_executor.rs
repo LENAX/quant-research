@@ -31,7 +31,10 @@ use uuid::Uuid;
 
 use super::{
     sync_rate_limiter::WebRequestRateLimiter,
-    task_manager::{create_sync_task_manager, FailedTask, TaskManager, TaskManagerError, SyncTaskMPSCReceiver, FailedTaskSPMCSender, TaskManagerErrorMPSCReceiver},
+    task_manager::{
+        create_sync_task_manager, FailedTask, FailedTaskSPMCSender, SyncTaskMPSCReceiver,
+        TaskManager, TaskManagerError, TaskManagerErrorMPSCReceiver,
+    },
     worker::{
         create_web_api_sync_workers, create_websocket_sync_workers, LongRunningWorker,
         ShortTaskHandlingWorker, SyncWorker, SyncWorkerData, SyncWorkerDataMPSCReceiver,
@@ -108,7 +111,7 @@ pub fn create_tokio_task_executor(
         worker_channels: WorkerChannels {
             worker_data_receiver: Arc::new(RwLock::new(Box::new(sync_worker_data_receiver))),
             worker_message_sender: Arc::new(RwLock::new(sync_worker_message_sender.clone_boxed())),
-            worker_error_receiver: Arc::new(RwLock::new(Box::new(sync_worker_error_receiver)))
+            worker_error_receiver: Arc::new(RwLock::new(Box::new(sync_worker_error_receiver))),
         },
         task_manager_channels: TaskManagerChannels {
             sync_task_receiver: Arc::new(RwLock::new(Box::new(task_receiver))),
@@ -117,10 +120,7 @@ pub fn create_tokio_task_executor(
         },
     };
 
-    (
-        task_executor,
-        sync_worker_message_sender.clone()
-    )
+    (task_executor, sync_worker_message_sender.clone())
 }
 
 // Task Executor need to retain a copy of worker channels and task manager channels to

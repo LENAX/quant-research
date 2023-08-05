@@ -45,7 +45,7 @@ use crate::{
     },
 };
 
-use super::sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter};
+use super::{sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter}, worker::SyncWorkerDataMPSCReceiver};
 
 pub type QueueId = Uuid;
 type CooldownTimerTask = JoinHandle<()>;
@@ -349,6 +349,7 @@ pub trait FailedTaskSPMCSender:
 {}
 
 impl FailedTaskSPMCSender for TokioSpmcMessageBusSender<FailedTask> {}
+
 
 /// TaskManager
 #[derive(Derivative, Getters, Setters, Default)]

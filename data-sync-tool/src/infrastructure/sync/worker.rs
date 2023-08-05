@@ -32,7 +32,7 @@ use crate::{
         BroadcastingMessageBusReceiver, BroadcastingMessageBusSender, MessageBus,
         MessageBusReceiver, MessageBusSender, MpscMessageBus, StaticAsyncComponent,
         StaticClonableAsyncComponent, StaticClonableMpscMQ, StaticMpscMQReceiver,
-    }, tokio_channel_mq::{TokioMpscMessageBusSender, TokioBroadcastingMessageBusReceiver}},
+    }, tokio_channel_mq::{TokioMpscMessageBusSender, TokioBroadcastingMessageBusReceiver, TokioMpscMessageBusReceiver, TokioBroadcastingMessageBusSender}},
 };
 
 #[derive(Derivative, Debug)]
@@ -129,18 +129,12 @@ pub trait SyncWorkerMessageMPMCSender:
 }
 
 pub trait SyncWorkerDataMPSCReceiver:
-    MessageBusReceiver<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent
-{
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerDataMPSCReceiver>;
-}
+    MessageBusReceiver<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent {}
 pub trait SyncWorkerDataMPSCSender:
     MessageBusSender<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent {}
 
 pub trait SyncWorkerErrorMessageMPSCReceiver:
-    MessageBusReceiver<SyncWorkerErrorMessage> + MpscMessageBus + StaticAsyncComponent
-{
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerErrorMessageMPSCReceiver>;
-}
+    MessageBusReceiver<SyncWorkerErrorMessage> + MpscMessageBus + StaticAsyncComponent {}
 
 pub trait SyncWorkerErrorMessageMPSCSender:
     MessageBusSender<SyncWorkerErrorMessage> + MpscMessageBus + StaticAsyncComponent
@@ -165,6 +159,15 @@ impl SyncWorkerErrorMessageMPSCSender for TokioMpscMessageBusSender<SyncWorkerEr
     }
     // implement the methods required by SyncWorkerErrorMessageMPSCSender here
 }
+
+impl SyncWorkerDataMPSCReceiver for TokioMpscMessageBusReceiver<SyncWorkerData> {}
+impl StaticAsyncComponent for TokioBroadcastingMessageBusSender<SyncWorkerMessage> {}
+impl SyncWorkerMessageMPMCSender for TokioBroadcastingMessageBusSender<SyncWorkerMessage> {
+    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCSender> {
+        Box::new(self.clone())
+    }
+}
+impl SyncWorkerErrorMessageMPSCReceiver for TokioMpscMessageBusReceiver<SyncWorkerErrorMessage> {}
 
 
 // Factory Methods

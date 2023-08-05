@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use super::{
     sync_rate_limiter::WebRequestRateLimiter,
-    task_manager::{create_sync_task_manager, FailedTask, TaskManager, TaskManagerError},
+    task_manager::{create_sync_task_manager, FailedTask, TaskManager, TaskManagerError, SyncTaskMPSCReceiver, FailedTaskSPMCSender, TaskManagerErrorMPSCReceiver},
     worker::{
         create_web_api_sync_workers, create_websocket_sync_workers, LongRunningWorker,
         ShortTaskHandlingWorker, SyncWorker, SyncWorkerData, SyncWorkerDataMPSCReceiver,
@@ -68,7 +68,7 @@ pub fn create_tokio_task_executor(
             TokioSpmcMessageBusReceiver<FailedTask>,
         >,
     >,
-    TokioExecutorChannels,
+    TokioBroadcastingMessageBusSender<SyncWorkerMessage>,
 ) {
     // create message bus channels
     let (task_sender, task_receiver) = create_tokio_mpsc_channel::<SyncTask>(channel_size);
@@ -105,20 +105,21 @@ pub fn create_tokio_task_executor(
         long_running_workers,
         short_task_handling_workers: short_running_workers,
         task_manager,
-        worker_channels: todo!(),
-        task_manager_channels: todo!(),
+        worker_channels: WorkerChannels {
+            worker_data_receiver: Arc::new(RwLock::new(Box::new(sync_worker_data_receiver))),
+            worker_message_sender: Arc::new(RwLock::new(sync_worker_message_sender.clone_boxed())),
+            worker_error_receiver: Arc::new(RwLock::new(Box::new(sync_worker_error_receiver)))
+        },
+        task_manager_channels: TaskManagerChannels {
+            sync_task_receiver: Arc::new(RwLock::new(Box::new(task_receiver))),
+            failed_task_sender: Arc::new(RwLock::new(Box::new(failed_task_sender))),
+            manager_error_receiver: Arc::new(RwLock::new(Box::new(error_receiver))),
+        },
     };
 
     (
         task_executor,
-        (
-            sync_worker_data_receiver,
-            sync_worker_message_sender,
-            sync_worker_error_receiver,
-            task_receiver,
-            error_receiver,
-            failed_task_sender,
-        ),
+        sync_worker_message_sender.clone()
     )
 }
 
@@ -135,9 +136,9 @@ struct WorkerChannels {
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
 struct TaskManagerChannels {
-    sync_task_receiver: Arc<RwLock<Box<dyn SyncWorkerDataMPSCReceiver>>>,
-    failed_task_sender: Arc<RwLock<Box<dyn SyncWorkerMessageMPMCSender>>>,
-    manager_error_receiver: Arc<RwLock<Box<dyn SyncWorkerErrorMessageMPSCReceiver>>>,
+    sync_task_receiver: Arc<RwLock<Box<dyn SyncTaskMPSCReceiver>>>,
+    failed_task_sender: Arc<RwLock<Box<dyn FailedTaskSPMCSender>>>,
+    manager_error_receiver: Arc<RwLock<Box<dyn TaskManagerErrorMPSCReceiver>>>,
 }
 
 #[derive(Derivative, Getters, Setters)]

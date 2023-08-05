@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use futures::channel::mpsc::TryRecvError;
+use tokio::sync::broadcast;
 use std::fmt;
 use std::{
     error::Error,
@@ -36,8 +37,10 @@ impl<T: std::fmt::Debug> Error for MessageBusError<T> {
 
 // Interfaces
 pub trait StaticMpscMQReceiver: MpscMessageBus + Sync + Send + 'static {}
+pub trait StaticMpscMQSender: MpscMessageBus + Sync + Send + 'static {}
 pub trait StaticClonableMpscMQ: MpscMessageBus + Sync + Send + Clone + 'static {}
 pub trait StaticClonableAsyncComponent: Sync + Send + Clone + 'static {}
+pub trait StaticAsyncComponent: Sync + Send + 'static {}
 
 /// Message Queue Trait
 /// TODO: Consider separate receivers and senders as different related traits
@@ -71,20 +74,29 @@ pub trait MpscMessageBus {}
 pub trait OneshotMessageBus {}
 
 // Marks a multiple consumer multiple producer message bus sender
-pub trait BroadcastMessageBusSender<T> {
+pub trait BroadcastingMessageBusSender<T> {
     fn subsribe(&self) -> Result<Box<dyn MessageBusReceiver<T>>, MessageBusError<T>>;
     fn receiver_count(&self) -> Result<usize, MessageBusError<T>>;
-    fn same_channel(&self, other: &Self) -> Result<bool, MessageBusError<T>>;
+    fn same_channel(
+        &self,
+        other: &dyn BroadcastingMessageBusSender<T>,
+    ) -> Result<bool, MessageBusError<T>>;
+    fn is_closed(&self) -> bool;
+    fn inner(&self) -> Option<&broadcast::Sender<T>>;
 }
 
 // Marks a multiple consumer multiple producer message bus sender
+// pub trait BroadcastingMessageBusSender {}
+// Marks a multiple consumer multiple producer message bus receiver
 pub trait BroadcastingMessageBusReceiver {}
 
 // Marks a single producer multiple consumer message bus sender
 pub trait SpmcMessageBusSender<T> {
     fn subscribe(&self) -> Result<Box<dyn MessageBusReceiver<T>>, MessageBusError<T>>;
     fn receiver_count(&self) -> Result<usize, MessageBusError<T>>;
-    fn same_channel(&self, other: &Self) -> Result<bool, MessageBusError<T>>;
+    fn same_channel(&self, other: &dyn SpmcMessageBusSender<T>) -> Result<bool, MessageBusError<T>>;
+    fn is_closed(&self) -> bool;
+    fn sender(&self) -> Option<&broadcast::Sender<T>>;
 }
 
 // Marks a single producer multiple consumer message bus receiver

@@ -5,7 +5,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     error::{self, Error},
-    fmt,
+    fmt::{self, Debug},
     ops::RangeBounds,
     sync::Arc,
 };
@@ -35,7 +35,12 @@ use crate::{
         factory::get_tokio_mq_factory,
         message_bus::{
             MessageBus, MessageBusReceiver, MessageBusSender, MpscMessageBus,
-            SpmcMessageBusReceiver, StaticClonableAsyncComponent, StaticClonableMpscMQ,
+            SpmcMessageBusReceiver, SpmcMessageBusSender, StaticAsyncComponent,
+            StaticClonableAsyncComponent, StaticClonableMpscMQ, StaticMpscMQReceiver,
+        },
+        tokio_channel_mq::{
+            TokioMpscMessageBusReceiver, TokioMpscMessageBusSender, TokioSpmcMessageBusReceiver,
+            TokioSpmcMessageBusSender,
         },
     },
 };
@@ -60,9 +65,9 @@ pub fn new_empty_queue_limitless<T: RateLimiter>(max_retry: Option<u32>) -> Sync
 
 pub fn create_sync_task_manager<
     T: RateLimiter + 'static,
-    MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
-    ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
-    MF: MessageBusReceiver<(QueueId, SyncTask)> + StaticClonableAsyncComponent + SpmcMessageBusReceiver,
+    MT: SyncTaskMPSCSender,
+    ME: TaskManagerErrorMPSCSender,
+    MF: FailedTaskSPMCReceiver,
 >(
     create_request: &CreateTaskManagerRequest,
     task_sender: MT,
@@ -260,7 +265,90 @@ impl error::Error for TaskManagerError {
 pub trait SyncTaskManager {
     async fn start(&mut self) -> Result<(), TaskManagerError>;
     async fn stop(&mut self);
+    async fn add_tasks_to_queue(&mut self, queue_id: QueueId, tasks: Vec<SyncTask>);
 }
+
+trait SyncTaskMpscSender: MessageBusSender<SyncTask> + StaticClonableMpscMQ {}
+trait SyncTaskMpscReceiver: MessageBusReceiver<SyncTask> + StaticMpscMQReceiver {}
+
+impl SyncTaskMpscSender for TokioMpscMessageBusSender<SyncTask> {}
+impl SyncTaskMpscReceiver for TokioMpscMessageBusReceiver<SyncTask> {}
+
+
+pub trait SyncTaskMPSCSender:
+    MessageBusSender<SyncTask> + MpscMessageBus + StaticAsyncComponent
+{
+    fn clone_boxed(&self) -> Box<dyn SyncTaskMPSCSender>;
+}
+
+impl SyncTaskMPSCSender for TokioMpscMessageBusSender<SyncTask> {
+    fn clone_boxed(&self) -> Box<dyn SyncTaskMPSCSender> {
+        Box::new(self.clone())
+    }
+}
+
+pub trait SyncTaskMPSCReceiver:
+    MessageBusReceiver<SyncTask> + MpscMessageBus + StaticAsyncComponent {}
+
+impl SyncTaskMPSCReceiver for TokioMpscMessageBusReceiver<SyncTask> {}
+
+trait TaskManagerErrorMpscSender: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ {}
+pub trait TaskManagerErrorMPSCSender:
+    MessageBusSender<TaskManagerError> + MpscMessageBus + StaticAsyncComponent
+{
+    fn clone_boxed(&self) -> Box<dyn TaskManagerErrorMPSCSender>;
+}
+
+impl TaskManagerErrorMPSCSender for TokioMpscMessageBusSender<TaskManagerError> {
+    fn clone_boxed(&self) -> Box<dyn TaskManagerErrorMPSCSender> {
+        Box::new(self.clone())
+    }
+}
+
+trait TaskManagerErrorMpscReceiver:
+    MessageBusReceiver<TaskManagerError> + StaticMpscMQReceiver {}
+
+impl TaskManagerErrorMpscSender for TokioMpscMessageBusSender<TaskManagerError> {}
+impl TaskManagerErrorMpscReceiver for TokioMpscMessageBusReceiver<TaskManagerError> {}
+
+
+pub trait TaskManagerErrorMPSCReceiver:
+    MessageBusReceiver<TaskManagerError> + MpscMessageBus + StaticAsyncComponent {}
+
+impl TaskManagerErrorMPSCReceiver for TokioMpscMessageBusReceiver<TaskManagerError> {}
+
+pub type FailedTask = (Uuid, SyncTask);
+trait FailedTaskSpmcReceiver:
+    MessageBusReceiver<FailedTask> + StaticClonableAsyncComponent + SpmcMessageBusReceiver
+{
+}
+
+trait FailedTaskSpmcSender:
+    MessageBusSender<FailedTask> + StaticAsyncComponent + SpmcMessageBusSender<FailedTask>
+{
+}
+
+impl FailedTaskSpmcReceiver for TokioSpmcMessageBusReceiver<FailedTask> {}
+impl FailedTaskSpmcSender for TokioSpmcMessageBusSender<FailedTask> {}
+
+
+pub trait FailedTaskSPMCReceiver:
+    MessageBusReceiver<FailedTask> + StaticAsyncComponent + SpmcMessageBusReceiver
+{
+    fn clone_boxed(&self) -> Box<dyn FailedTaskSPMCReceiver>;
+}
+
+impl FailedTaskSPMCReceiver for TokioSpmcMessageBusReceiver<FailedTask> {
+    fn clone_boxed(&self) -> Box<dyn FailedTaskSPMCReceiver> {
+        Box::new(self.clone())
+    }
+}
+
+pub trait FailedTaskSPMCSender:
+    MessageBusSender<FailedTask> + StaticAsyncComponent + SpmcMessageBusSender<FailedTask>
+{}
+
+impl FailedTaskSPMCSender for TokioSpmcMessageBusSender<FailedTask> {}
 
 /// TaskManager
 #[derive(Derivative, Getters, Setters, Default)]
@@ -268,11 +356,9 @@ pub trait SyncTaskManager {
 pub struct TaskManager<T, MT, ME, MF>
 where
     T: RateLimiter,
-    MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
-    ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
-    MF: MessageBusReceiver<(QueueId, SyncTask)>
-        + StaticClonableAsyncComponent
-        + SpmcMessageBusReceiver,
+    MT: SyncTaskMPSCSender,
+    ME: TaskManagerErrorMPSCSender,
+    MF: FailedTaskSPMCReceiver,
 {
     queues: Arc<RwLock<HashMap<QueueId, Arc<Mutex<SyncTaskQueue<T>>>>>>,
     task_channel: MT,
@@ -283,11 +369,9 @@ where
 impl<T, MT, ME, MF> TaskManager<T, MT, ME, MF>
 where
     T: RateLimiter,
-    MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
-    ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
-    MF: MessageBusReceiver<(QueueId, SyncTask)>
-        + StaticClonableAsyncComponent
-        + SpmcMessageBusReceiver,
+    MT: SyncTaskMPSCSender,
+    ME: TaskManagerErrorMPSCSender,
+    MF: FailedTaskSPMCReceiver,
 {
     pub fn new(
         task_queues: Vec<SyncTaskQueue<T>>,
@@ -339,16 +423,18 @@ where
 impl<T, MT, ME, MF> SyncTaskManager for TaskManager<T, MT, ME, MF>
 where
     T: RateLimiter + 'static,
-    MT: MessageBusSender<SyncTask> + StaticClonableMpscMQ,
-    ME: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ,
-    MF: MessageBusReceiver<(QueueId, SyncTask)>
-        + StaticClonableAsyncComponent
-        + SpmcMessageBusReceiver,
+    MT: SyncTaskMPSCSender + Clone,
+    ME: TaskManagerErrorMPSCSender + Clone,
+    MF: FailedTaskSPMCReceiver + Clone,
 {
     async fn stop(&mut self) {
         self.task_channel.close();
         self.error_message_channel.close();
         self.failed_task_channel.close();
+    }
+
+    async fn add_tasks_to_queue(&mut self, queue_id: QueueId, tasks: Vec<SyncTask>) {
+        self.add_tasks_to_queue(queue_id, tasks).await;
     }
 
     /// start task manager and push tasks to its consumers

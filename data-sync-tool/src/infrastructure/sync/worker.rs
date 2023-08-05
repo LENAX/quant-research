@@ -28,10 +28,11 @@ use crate::{
         sync_task::{SyncStatus, SyncTask},
         value_objects::task_spec::RequestMethod,
     },
-    infrastructure::mq::message_bus::{
-        BroadcastingMessageBusReceiver, MessageBus, MessageBusReceiver, MessageBusSender,
+    infrastructure::mq::{message_bus::{
+        BroadcastingMessageBusReceiver, BroadcastingMessageBusSender, MessageBus,
+        MessageBusReceiver, MessageBusSender, MpscMessageBus, StaticAsyncComponent,
         StaticClonableAsyncComponent, StaticClonableMpscMQ, StaticMpscMQReceiver,
-    },
+    }, tokio_channel_mq::{TokioMpscMessageBusSender, TokioBroadcastingMessageBusReceiver}},
 };
 
 #[derive(Derivative, Debug)]
@@ -73,8 +74,100 @@ pub trait LongTaskHandlingWorker {}
 /// A market trait for workers handling short tasks
 pub trait ShortTaskHandlingWorker {}
 pub trait ShortRunningWorker: SyncWorker + ShortTaskHandlingWorker {}
-pub trait LongRunningWorker: SyncWorker + LongTaskHandlingWorker {} 
+pub trait LongRunningWorker: SyncWorker + LongTaskHandlingWorker {}
 
+trait SyncWorkerMessageBroadcastingReceiver:
+    MessageBusReceiver<SyncWorkerMessage>
+    + StaticClonableAsyncComponent
+    + BroadcastingMessageBusReceiver
+    + Clone
+{
+}
+trait SyncWorkerMessageBroadcastingSender:
+    MessageBusSender<SyncWorkerMessage>
+    + StaticClonableAsyncComponent
+    + BroadcastingMessageBusSender<SyncWorkerMessage>
+    + Clone
+{
+}
+
+trait SyncWorkerDataMpscReceiver:
+    MessageBusReceiver<SyncWorkerData> + StaticClonableMpscMQ + Clone
+{
+}
+trait SyncWorkerDataMpscSender:
+    MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ + Clone
+{
+}
+
+trait SyncWorkerErrorMessageMpscReceiver:
+    MessageBusReceiver<SyncWorkerErrorMessage> + StaticClonableMpscMQ + Clone
+{
+}
+trait SyncWorkerErrorMessageMpscSender:
+    MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ + Clone
+{
+}
+
+impl SyncWorkerDataMpscSender for TokioMpscMessageBusSender<SyncWorkerData> {}
+impl SyncWorkerErrorMessageMpscSender for TokioMpscMessageBusSender<SyncWorkerErrorMessage> {}
+
+// Try to work around the object safety restriction
+// Traits extend from Clone is not object-safe
+// Use this trait in external modules and use clone_boxed method to clone the object
+pub trait SyncWorkerMessageMPMCReceiver:
+    MessageBusReceiver<SyncWorkerMessage> + BroadcastingMessageBusReceiver + StaticAsyncComponent
+{
+    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCReceiver>;
+}
+pub trait SyncWorkerMessageMPMCSender:
+    MessageBusSender<SyncWorkerMessage>
+    + BroadcastingMessageBusSender<SyncWorkerMessage>
+    + StaticAsyncComponent
+{
+    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCSender>;
+}
+
+pub trait SyncWorkerDataMPSCReceiver:
+    MessageBusReceiver<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent
+{
+    fn clone_boxed(&self) -> Box<dyn SyncWorkerDataMPSCReceiver>;
+}
+pub trait SyncWorkerDataMPSCSender:
+    MessageBusSender<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent {}
+
+pub trait SyncWorkerErrorMessageMPSCReceiver:
+    MessageBusReceiver<SyncWorkerErrorMessage> + MpscMessageBus + StaticAsyncComponent
+{
+    fn clone_boxed(&self) -> Box<dyn SyncWorkerErrorMessageMPSCReceiver>;
+}
+
+pub trait SyncWorkerErrorMessageMPSCSender:
+    MessageBusSender<SyncWorkerErrorMessage> + MpscMessageBus + StaticAsyncComponent
+{
+    fn clone_boxed(&self) -> Box<dyn SyncWorkerErrorMessageMPSCSender>;
+}
+
+impl SyncWorkerMessageBroadcastingReceiver for TokioBroadcastingMessageBusReceiver<SyncWorkerMessage> {
+    // Implement the required methods
+}
+
+impl SyncWorkerDataMPSCSender for TokioMpscMessageBusSender<SyncWorkerData> {}
+impl SyncWorkerMessageMPMCReceiver for TokioBroadcastingMessageBusReceiver<SyncWorkerMessage> {
+    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCReceiver> {
+        Box::new(self.clone())
+    }
+}
+
+impl SyncWorkerErrorMessageMPSCSender for TokioMpscMessageBusSender<SyncWorkerErrorMessage> {
+    fn clone_boxed(&self) -> Box<dyn SyncWorkerErrorMessageMPSCSender> {
+        Box::new(self.clone())
+    }
+    // implement the methods required by SyncWorkerErrorMessageMPSCSender here
+}
+
+
+// Factory Methods
 fn build_headers(header_map: &HashMap<String, String>) -> HeaderMap {
     let header: HeaderMap = header_map
         .iter()
@@ -128,14 +221,12 @@ pub fn create_websocket_sync_workers<MD, MW, ME>(
     n: usize,
     data_sender: MD,
     worker_command_receiver: MW,
-    error_sender: ME
-) -> Vec<WebsocketSyncWorker<MD, MW, ME>> 
+    error_sender: ME,
+) -> Vec<WebsocketSyncWorker<MD, MW, ME>>
 where
-    MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ + Clone,
-    MW: MessageBusReceiver<SyncWorkerMessage>
-        + StaticClonableAsyncComponent
-        + BroadcastingMessageBusReceiver + Clone,
-    ME: MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ + Clone,
+    MD: SyncWorkerDataMPSCSender + StaticClonableMpscMQ,
+    MW: SyncWorkerMessageMPMCReceiver + StaticClonableAsyncComponent,
+    ME: SyncWorkerErrorMessageMPSCSender + StaticClonableMpscMQ,
 {
     let mut workers = Vec::new();
     for _ in 0..n {
@@ -145,32 +236,31 @@ where
             error_sender.clone(),
         );
         workers.push(new_worker);
-    };
+    }
     workers
 }
 
 pub fn create_web_api_sync_workers(n: usize) -> Vec<WebAPISyncWorker> {
     let mut workers = Vec::new();
-    
+
     for _ in 0..n {
         let http_client = Client::new();
         let new_worker = WebAPISyncWorker::new(http_client);
         workers.push(new_worker);
-    };
+    }
     workers
 }
 
 pub fn create_short_running_workers(n: usize) -> Vec<Box<dyn ShortRunningWorker>> {
     let mut workers: Vec<Box<dyn ShortRunningWorker>> = Vec::new();
-    
+
     for _ in 0..n {
         let http_client = Client::new();
         let new_worker = WebAPISyncWorker::new(http_client);
         workers.push(Box::new(new_worker));
-    };
+    }
     workers
 }
-
 
 #[derive(Derivative, PartialEq, Eq)]
 #[derivative(Default(bound = ""))]
@@ -291,7 +381,6 @@ where
     ME: MessageBusReceiver<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
 {
 }
-
 
 impl<MD, MW, ME> WebsocketSyncWorker<MD, MW, ME>
 where
@@ -489,7 +578,6 @@ where
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

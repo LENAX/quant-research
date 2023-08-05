@@ -50,7 +50,7 @@ use super::{
     worker::SyncWorkerDataMPSCReceiver,
 };
 
-pub type QueueId = Uuid;
+pub type QueueId = (Uuid, Uuid, Uuid);
 type CooldownTimerTask = JoinHandle<()>;
 type TimeSecondLeft = i64;
 
@@ -58,12 +58,17 @@ type TimeSecondLeft = i64;
 pub fn new_empty_queue<T: RateLimiter>(
     rate_limiter: T,
     max_retry: Option<u32>,
+    sync_plan_id: Uuid,
+    dataset_id: Uuid,
 ) -> SyncTaskQueue<T> {
-    return SyncTaskQueue::<T>::new(vec![], Some(rate_limiter), max_retry);
+    return SyncTaskQueue::<T>::new(vec![], Some(rate_limiter), max_retry, sync_plan_id, dataset_id);
 }
 
-pub fn new_empty_queue_limitless<T: RateLimiter>(max_retry: Option<u32>) -> SyncTaskQueue<T> {
-    return SyncTaskQueue::new(vec![], None, max_retry);
+pub fn new_empty_queue_limitless<T: RateLimiter>(
+    max_retry: Option<u32>,
+    sync_plan_id: Uuid,
+    dataset_id: Uuid) -> SyncTaskQueue<T> {
+    return SyncTaskQueue::new(vec![], None, max_retry, sync_plan_id, dataset_id);
 }
 
 pub fn create_sync_task_manager<
@@ -93,12 +98,12 @@ where
                         *create_limiter_req.max_daily_request(),
                         *create_limiter_req.cooldown(),
                     );
-                    let queue = new_empty_queue(rate_limiter, *req.max_retry());
+                    let queue = new_empty_queue(rate_limiter, *req.max_retry(), *req.sync_plan_id(), *req.dataset_id());
                     return queue;
                 }
             },
             None => {
-                let queue = new_empty_queue_limitless(*req.max_retry());
+                let queue = new_empty_queue_limitless(*req.max_retry(), *req.sync_plan_id(), *req.dataset_id());
                 return queue;
             }
         })
@@ -120,6 +125,8 @@ pub enum SyncTaskQueueValue {
 #[getset(get = "pub", set = "pub", get_mut = "pub")]
 pub struct SyncTaskQueue<T: RateLimiter> {
     id: Uuid,
+    sync_plan_id: Uuid,
+    dataset_id: Uuid,
     tasks: VecDeque<SyncTask>,
     rate_limiter: Option<T>,
     max_retry: Option<u32>,
@@ -131,6 +138,8 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
         tasks: Vec<SyncTask>,
         rate_limiter: Option<T>,
         max_retry: Option<u32>,
+        sync_plan_id: Uuid,
+        dataset_id: Uuid,
     ) -> SyncTaskQueue<T> {
         let task_queue = VecDeque::from(tasks);
         SyncTaskQueue {
@@ -139,6 +148,8 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
             rate_limiter,
             max_retry,
             retries_left: max_retry,
+            sync_plan_id,
+            dataset_id,
         }
     }
 
@@ -367,6 +378,7 @@ where
     ME: TaskManagerErrorMPSCSender,
     MF: FailedTaskSPMCReceiver,
 {
+    // TODO: test may fail because for now queue key is changed to (qid, sync_plan_id, dataset_id)
     queues: Arc<RwLock<HashMap<QueueId, Arc<Mutex<SyncTaskQueue<T>>>>>>,
     task_channel: MT,
     error_message_channel: ME,
@@ -388,7 +400,7 @@ where
     ) -> TaskManager<T, MT, ME, MF> {
         let mut q_map = HashMap::new();
         task_queues.into_iter().for_each(|q| {
-            q_map.insert(q.id().clone(), Arc::new(Mutex::new(q)));
+            q_map.insert((*q.id(), *q.sync_plan_id(), *q.dataset_id()), Arc::new(Mutex::new(q)));
         });
         Self {
             queues: Arc::new(RwLock::new(q_map)),
@@ -400,7 +412,7 @@ where
 
     pub async fn add_queue(&mut self, task_queue: SyncTaskQueue<T>) {
         let mut q_lock = self.queues.write().await;
-        q_lock.insert(task_queue.id().clone(), Arc::new(Mutex::new(task_queue)));
+        q_lock.insert((*task_queue.id(), *task_queue.sync_plan_id(), *task_queue.dataset_id()), Arc::new(Mutex::new(task_queue)));
     }
 
     pub async fn add_tasks_to_queue(&mut self, queue_id: QueueId, tasks: Vec<SyncTask>) {
@@ -496,7 +508,7 @@ where
 
                                             match r {
                                                 Ok(()) => {
-                                                    println!("Sent task {:?} in queue {}", task_id, q_id);
+                                                    println!("Sent task {:?} in queue {:#?}", task_id, q_id);
                                                     no_task_found = false;
                                                 },
                                                 Err(e) => {
@@ -507,7 +519,7 @@ where
                                                 }
                                             }
                                         } else {
-                                            println!("Received no task from queue {}!", q_id);
+                                            println!("Received no task from queue {:#?}!", q_id);
                                         }
                                     },
                                     SyncTaskQueueValue::RateLimited(cooldown_task, time_left) => {
@@ -538,10 +550,10 @@ where
                     }
                     // Recommend dropping channels explicitly!
                     drop(new_task_sender_channel);
-                    println!("Dropped task sender in queue {}!", q_id);
+                    println!("Dropped task sender in queue {:#?}!", q_id);
                     drop(new_error_sender_channel);
-                    println!("Dropped error sender in queue {}!", q_id);
-                    println!("Queue {} has no task left. Quitting...", q_id);
+                    println!("Dropped error sender in queue {:#?}!", q_id);
+                    println!("Queue {:#?} has no task left. Quitting...", q_id);
                 })
             })
             .collect();
@@ -554,7 +566,10 @@ where
                 match receive_result {
                     Ok((qid, failed_task)) => {
                         let queues = queues_ref.read().await;
-                        if let Some(q) = queues.get(&qid) {
+                        let sync_plan_id = failed_task.sync_plan_id().unwrap_or(Uuid::new_v4());
+                        let dataset_id = failed_task.dataset_id().unwrap_or(Uuid::new_v4());
+                        let q_key = (qid, sync_plan_id, dataset_id);
+                        if let Some(q) = queues.get(&q_key) {
                             let mut q_lock = q.lock().await;
                             if let Some(mut n_retry) = q_lock.retries_left() {
                                 if n_retry > 0 {
@@ -562,6 +577,8 @@ where
                                     q_lock.set_retries_left(Some(n_retry - 1));
                                 }
                             }
+                        } else {
+                            error!("Queue not found. Perhaps sync task is not tied to a dataset id and sync plan id. SyncTask: {:#?}", failed_task);
                         }
                     }
                     Err(e) => {
@@ -581,6 +598,8 @@ where
         Ok(())
     }
 }
+
+// TODO: test may fail because for now queue key is changed to (qid, sync_plan_id, dataset_id)
 
 #[cfg(test)]
 mod tests {
@@ -680,7 +699,7 @@ mod tests {
     ) -> SyncTaskQueue<T> {
         let mut rng = rand::thread_rng();
         let max_retry = rng.gen_range(10..20);
-        let mut new_queue = new_empty_queue(rate_limiter, Some(max_retry));
+        let mut new_queue = new_empty_queue(rate_limiter, Some(max_retry), Uuid::new_v4(), Uuid::new_v4(),);
         // let mut new_queue = new_empty_queue_limitless(None);
         let n_task = rng.gen_range(min_tasks..max_tasks);
         let random_tasks = generate_random_sync_tasks(n_task);
@@ -727,6 +746,8 @@ mod tests {
                 vec![],
                 Some(test_rate_limiter),
                 Some(max_retry),
+                Uuid::new_v4(),
+                Uuid::new_v4(),
             )));
 
         let tasks = generate_random_sync_tasks(100);

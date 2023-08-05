@@ -141,7 +141,7 @@ struct TaskManagerChannels {
     manager_error_receiver: Arc<RwLock<Box<dyn TaskManagerErrorMPSCReceiver>>>,
 }
 
-#[derive(Derivative, Getters, Setters)]
+#[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncTaskExecutor<LW, SW, TM> {
     long_running_workers: Vec<LW>,
@@ -153,8 +153,13 @@ pub struct SyncTaskExecutor<LW, SW, TM> {
 
 // TODO:
 // 1. implement TaskExecutor trait
-// 2. may need channels to coordinate workers and task manager
+// 2. may need channels to coordinate workers and task manager ✔ 
 // 3. How to populate tasks into task manager's queues and ensure all tasks of one dataset go to the same queue?
 // 4. Additional features like progress reporting.
 
-impl<LW, SW, TM> SyncTaskExecutor<LW, SW, TM> {}
+/// 
+
+impl<LW, SW, TM> SyncTaskExecutor<LW, SW, TM> {
+
+
+}

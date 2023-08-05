@@ -1,6 +1,7 @@
 /// DTOs related to the task management module
 ///
 use getset::{Getters, Setters};
+use uuid::Uuid;
 
 use crate::infrastructure::{
     mq::factory::{MQType, SupportedMQImpl},
@@ -18,6 +19,8 @@ pub struct CreateRateLimiterRequest {
 #[derive(Getters, Setters, Clone)]
 #[getset(get = "pub", set = "pub")]
 pub struct CreateSyncTaskQueueRequest {
+    dataset_id: Uuid,
+    sync_plan_id: Uuid,
     rate_limiter_impl: RateLimiterImpls,
     rate_limiter_param: Option<CreateRateLimiterRequest>,
     max_retry: Option<u32>,

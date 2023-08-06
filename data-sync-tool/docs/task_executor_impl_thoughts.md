@@ -14,7 +14,6 @@ From a high level perspective, the design goal of SyncTaskExecutor is to accept 
 2. Can flexiblely add, remove, and stop tasks while running
 3. Handles errors gracefully
 
-
 ## Structural Design
 
 #### Data Members
@@ -46,3 +45,20 @@ Task scheduling is handled by the `TaskManager`, which maintains a queue of task
 ### Flexibility
 
 `SyncTaskExecutor` is designed with flexibility in mind. It allows users to add new tasks for immediate execution or schedule them for later. It also provides the capability to start tasks manually or stop them as needed. This flexibility allows the executor to adapt to changing requirements and usage patterns.
+
+
+## Implementation
+
+Right now I really have to think about the implementation. My rough idea of how an implementation of SyncTaskManager could work is as follows:
+
+1. Client modules call load_sync_plan or load_sync_plans to add one or many sync_plans to TaskManager. Inside the task manager, the task manager will create new SyncTaskQueue for each sync plan and load their sync task to the queue. I guess these two methods also need to add additional parameters for SyncTaskQueue's RateLimiter if the rate of sending tasks needs to be throttled.
+2. Then the client module will call start_sending_all_tasks to send tasks over its channels.
+3. Meanwhile, some other modules may add tasks to sync plans' queues while the task manager is sending tasks from the queue.
+4. They may also pause, resume or stop a sync task's queue.
+5. They may also call progress reporting methods.
+6. Task sending must not stop unless the task manager is asked to pause, stop, or shutdown. Thus, task sending must work concurrently along with other method calls.
+7. Finally, when all tasks are sent, task manager will go to sleep until the next load_sync_plans and start_sending_all_tasks is called.
+8. When graceful_shutdown is called, all unsent tasks will be dropped, and task manager will cancel all running tasks. Then it will close its channels
+9. When force_shutdown is called, task manager will immediately cancel all running tasks without waiting. Then it will close its channels.
+
+SyncTaskManager is an important dependency of the SyncTaskExecutor. We can safely assume that SyncTaskManager is primarily used by SyncTaskExecutor.

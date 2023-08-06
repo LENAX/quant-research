@@ -44,15 +44,18 @@ impl Error for InvalidLimitError {
 
 // Factory Methods
 // TODO: add an abstract factory method to provide an unified interface for all rate limiter factories
+#[derive(Derivative)]
+#[derivative(Default(bound = ""))]
 #[derive(Debug, Clone, Copy)]
 pub enum RateLimiterImpls {
+    #[derivative(Default)]
     WebRequestRateLimiter,
 }
 
 pub fn new_web_request_limiter(
-    max_request: i64,
-    max_daily_request: Option<i64>,
-    cooldown: Option<i64>,
+    max_request: u32,
+    max_daily_request: Option<u32>,
+    cooldown: Option<u32>,
 ) -> WebRequestRateLimiter {
     return WebRequestRateLimiter::new(max_request, max_daily_request, cooldown).unwrap();
 }
@@ -77,10 +80,10 @@ pub fn create_rate_limiter(
 #[getset(get = "pub")]
 pub struct WebRequestRateLimiter {
     id: Uuid,
-    max_minute_request: Arc<RwLock<i64>>,
-    remaining_minute_requests: Arc<Mutex<i64>>,
-    remaining_daily_requests: Arc<Mutex<Option<i64>>>,
-    cool_down_seconds: Arc<RwLock<i64>>,
+    max_minute_request: Arc<RwLock<u32>>,
+    remaining_minute_requests: Arc<Mutex<u32>>,
+    remaining_daily_requests: Arc<Mutex<Option<u32>>>,
+    cool_down_seconds: Arc<RwLock<u32>>,
     count_down: Arc<Mutex<Option<Duration>>>,
     last_request_time: Arc<Mutex<Option<chrono::DateTime<chrono::Local>>>>,
 }
@@ -101,7 +104,7 @@ impl RateLimiter for WebRequestRateLimiter {
             if reset_timer {
                 // if the timer is not activated, or the caller explicitly asks to reset the timer
                 let cool_down_second_lock = self.cool_down_seconds.write().await;
-                *count_down_lock = Some(Duration::seconds(*cool_down_second_lock));
+                *count_down_lock = Some(Duration::seconds((*cool_down_second_lock).into()));
                 info!(
                     "In RateLimiter {}, countdown: {:?}",
                     self.id, count_down_lock
@@ -219,7 +222,7 @@ impl RateLimiter for WebRequestRateLimiter {
             if *remaining_minute_requests_lock <= 0 {
                 // no more requests are allowed. Should start waiting immediately
                 let cooldown_seconds_lock = self.cool_down_seconds.read().await;
-                return RateLimitStatus::RequestPerMinuteExceeded(true, *cooldown_seconds_lock);
+                return RateLimitStatus::RequestPerMinuteExceeded(true, (*cooldown_seconds_lock).into());
             }
 
             *remaining_minute_requests_lock -= 1;
@@ -232,9 +235,9 @@ impl RateLimiter for WebRequestRateLimiter {
 
 impl WebRequestRateLimiter {
     pub fn new(
-        max_minute_request: i64,
-        max_daily_request: Option<i64>,
-        cool_down_seconds: Option<i64>,
+        max_minute_request: u32,
+        max_daily_request: Option<u32>,
+        cool_down_seconds: Option<u32>,
     ) -> Result<WebRequestRateLimiter, InvalidLimitError> {
         if max_minute_request < 0 {
             return Err(InvalidLimitError);
@@ -246,7 +249,7 @@ impl WebRequestRateLimiter {
             }
         }
 
-        let mut default_cool_down_seconds: i64 = 60;
+        let mut default_cool_down_seconds = 60;
 
         if let Some(cooldown_sec) = cool_down_seconds {
             if cooldown_sec < 0 {

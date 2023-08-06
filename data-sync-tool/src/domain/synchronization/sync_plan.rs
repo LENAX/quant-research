@@ -41,7 +41,7 @@ pub struct CreateTaskRequest {
 }
 
 // Synchronization Plan
-#[derive(Derivative, Debug, PartialEq, Eq, Clone, Getters, Setters, Default)]
+#[derive(Derivative, Debug, Clone, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncPlan {
     id: Uuid,

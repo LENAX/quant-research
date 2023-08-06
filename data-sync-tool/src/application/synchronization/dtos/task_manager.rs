@@ -3,18 +3,29 @@
 use getset::{Getters, Setters};
 use uuid::Uuid;
 
-use crate::infrastructure::{
+use crate::{infrastructure::{
     mq::factory::{MQType, SupportedMQImpl},
     sync::sync_rate_limiter::RateLimiterImpls,
-};
+}, domain::synchronization::value_objects::sync_config::RateQuota};
 
 #[derive(Getters, Setters, Default, Clone)]
 #[getset(get = "pub", set = "pub")]
 pub struct CreateRateLimiterRequest {
-    max_request: i64,
-    max_daily_request: Option<i64>,
-    cooldown: Option<i64>,
+    max_request: u32,
+    max_daily_request: Option<u32>,
+    cooldown: Option<u32>,
 }
+
+impl From<&RateQuota> for CreateRateLimiterRequest {
+    fn from(item: &RateQuota) -> Self {
+        CreateRateLimiterRequest {
+            max_request: *item.max_request_per_minute(),
+            max_daily_request: Some(*item.daily_limit()),
+            cooldown: Some(*item.cooldown_seconds()),
+        }
+    }
+}
+
 
 #[derive(Getters, Setters, Clone)]
 #[getset(get = "pub", set = "pub")]

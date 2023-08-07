@@ -153,13 +153,10 @@ pub struct SyncTaskExecutor<LW, SW, TM> {
 
 // TODO:
 // 1. implement TaskExecutor trait
-// 2. may need channels to coordinate workers and task manager ✔ 
+// 2. may need channels to coordinate workers and task manager ✔
 // 3. How to populate tasks into task manager's queues and ensure all tasks of one dataset go to the same queue?
 // 4. Additional features like progress reporting.
 
-/// 
+///
 
-impl<LW, SW, TM> SyncTaskExecutor<LW, SW, TM> {
-
-
-}
+impl<LW, SW, TM> SyncTaskExecutor<LW, SW, TM> {}

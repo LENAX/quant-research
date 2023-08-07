@@ -25,11 +25,15 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::{
-    application::synchronization::dtos::task_manager::{CreateTaskManagerRequest, CreateRateLimiterRequest},
+    application::synchronization::dtos::task_manager::{
+        CreateRateLimiterRequest, CreateTaskManagerRequest,
+    },
     domain::synchronization::{
         custom_errors::TimerError,
         rate_limiter::{RateLimitStatus, RateLimiter},
-        sync_task::SyncTask, sync_plan::SyncPlan, value_objects::sync_config,
+        sync_plan::SyncPlan,
+        sync_task::SyncTask,
+        value_objects::sync_config,
     },
     infrastructure::mq::{
         factory::get_tokio_mq_factory,
@@ -46,7 +50,7 @@ use crate::{
 };
 
 use super::{
-    sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter, create_rate_limiter},
+    sync_rate_limiter::{create_rate_limiter, new_web_request_limiter, WebRequestRateLimiter},
     worker::SyncWorkerDataMPSCReceiver,
 };
 
@@ -64,7 +68,9 @@ pub fn new_empty_queue<T: RateLimiter>(
 }
 
 pub fn new_empty_queue_limitless<T: RateLimiter>(
-    max_retry: Option<u32>, sync_plan_id: Uuid) -> SyncTaskQueue<T> {
+    max_retry: Option<u32>,
+    sync_plan_id: Uuid,
+) -> SyncTaskQueue<T> {
     return SyncTaskQueue::new(vec![], None, max_retry, sync_plan_id);
 }
 
@@ -95,7 +101,8 @@ where
                         *create_limiter_req.max_daily_request(),
                         *create_limiter_req.cooldown(),
                     );
-                    let queue = new_empty_queue(rate_limiter, *req.max_retry(), *req.sync_plan_id());
+                    let queue =
+                        new_empty_queue(rate_limiter, *req.max_retry(), *req.sync_plan_id());
                     return queue;
                 }
             },
@@ -109,8 +116,6 @@ where
     let task_manager = TaskManager::new(queues, task_sender, error_sender, failed_task_receiver);
     return task_manager;
 }
-
-
 
 // Component Definitions
 #[derive(Debug)]
@@ -254,7 +259,10 @@ pub enum TaskManagerError {
     RateLimited(Option<Arc<CooldownTimerTask>>, TimeSecondLeft), // timer task, seco
     DailyLimitExceeded,
     RateLimiterInitializationError(TimerError),
+    BatchPlanInsertionFailed(String),
     QueueNotFound,
+    MissingRateLimitParam,
+    RateLimiterNotSet(String),
     OtherError(String),
 }
 
@@ -281,41 +289,49 @@ pub struct TaskSendingProgress {
 }
 
 #[async_trait]
-pub trait SyncTaskManager {
+pub trait SyncTaskManager<T: RateLimiter> {
     // start syncing all plans by sending tasks out to workers
     async fn start_sending_all_tasks(&mut self) -> Result<(), TaskManagerError>;
-    
-    // stop syncing all plans 
+
+    // stop syncing all plans
     async fn stop_sending_all_tasks(&mut self) -> Result<(), TaskManagerError>;
-    
+
     // When need add new tasks ad hoc, use this method
-    async fn add_tasks_to_plan(&mut self, plan_id: Uuid, tasks: Vec<SyncTask>) -> Result<(), TaskManagerError>;
-    
+    async fn add_tasks_to_plan(
+        &mut self,
+        plan_id: Uuid,
+        tasks: Vec<SyncTask>,
+    ) -> Result<(), TaskManagerError>;
+
     // add new plans to sync
-    async fn load_sync_plan(&mut self, sync_plan: &SyncPlan) -> Result<(), TaskManagerError>;
-    async fn load_sync_plans(&mut self, sync_plans: &[SyncPlan]) -> Result<(), TaskManagerError>;
-    
+    async fn load_sync_plan(&mut self, sync_plan: &SyncPlan, rate_limiter: Option<T>) -> Result<(), TaskManagerError>;
+    async fn load_sync_plans(&mut self, sync_plans: &[SyncPlan], rate_limiters: Vec<Option<T>>) -> Result<(), TaskManagerError>;
+
     // stop syncing given the id, returns all unsynced tasks
     async fn stop_sending_task(&mut self, sync_plan_id: Uuid) -> Result<(), TaskManagerError>;
-    
+
     // pause sending tasks
     // typically used when rate limiting does not help
     // then users can pause it for a while to let the remote release the limit
     async fn pause_sending_task(&mut self, sync_plan_id: Uuid) -> Result<(), TaskManagerError>;
-    
+
     // resume sending tasks
     async fn resume_sending_tasks(&mut self, sync_plan_id: Uuid) -> Result<(), TaskManagerError>;
 
     // report how many unsent tasks for each sync plan
-    async fn report_task_sending_progress(&mut self, sync_plan_id: Uuid) -> Result<TaskSendingProgress, TaskManagerError>;
-    async fn report_all_task_sending_progress(&mut self) -> Result<Vec<TaskSendingProgress>, TaskManagerError>;
-    
+    async fn report_task_sending_progress(
+        &mut self,
+        sync_plan_id: Uuid,
+    ) -> Result<TaskSendingProgress, TaskManagerError>;
+    async fn report_all_task_sending_progress(
+        &mut self,
+    ) -> Result<Vec<TaskSendingProgress>, TaskManagerError>;
+
     // stop all sync plans and wait until all queues are closed, then releases all resources
     async fn graceful_shutdown(&mut self) -> Result<(), TaskManagerError>;
-    
+
     // stop directly without waiting
     fn force_shutdown(&mut self);
-
 }
 
 trait SyncTaskMpscSender: MessageBusSender<SyncTask> + StaticClonableMpscMQ {}
@@ -325,7 +341,8 @@ impl SyncTaskMpscSender for TokioMpscMessageBusSender<SyncTask> {}
 impl SyncTaskMpscReceiver for TokioMpscMessageBusReceiver<SyncTask> {}
 
 pub trait SyncTaskMPSCSender:
-    MessageBusSender<SyncTask> + MpscMessageBus + StaticAsyncComponent {
+    MessageBusSender<SyncTask> + MpscMessageBus + StaticAsyncComponent
+{
     fn clone_boxed(&self) -> Box<dyn SyncTaskMPSCSender>;
 }
 
@@ -335,12 +352,16 @@ impl SyncTaskMPSCSender for TokioMpscMessageBusSender<SyncTask> {
     }
 }
 
-pub trait SyncTaskMPSCReceiver: MessageBusReceiver<SyncTask> + MpscMessageBus + StaticAsyncComponent {}
+pub trait SyncTaskMPSCReceiver:
+    MessageBusReceiver<SyncTask> + MpscMessageBus + StaticAsyncComponent
+{
+}
 impl SyncTaskMPSCReceiver for TokioMpscMessageBusReceiver<SyncTask> {}
 
 trait TaskManagerErrorMpscSender: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ {}
 pub trait TaskManagerErrorMPSCSender:
-    MessageBusSender<TaskManagerError> + MpscMessageBus + StaticAsyncComponent {
+    MessageBusSender<TaskManagerError> + MpscMessageBus + StaticAsyncComponent
+{
     fn clone_boxed(&self) -> Box<dyn TaskManagerErrorMPSCSender>;
 }
 
@@ -351,28 +372,37 @@ impl TaskManagerErrorMPSCSender for TokioMpscMessageBusSender<TaskManagerError> 
 }
 
 trait TaskManagerErrorMpscReceiver:
-    MessageBusReceiver<TaskManagerError> + StaticMpscMQReceiver {}
+    MessageBusReceiver<TaskManagerError> + StaticMpscMQReceiver
+{
+}
 
 impl TaskManagerErrorMpscSender for TokioMpscMessageBusSender<TaskManagerError> {}
 impl TaskManagerErrorMpscReceiver for TokioMpscMessageBusReceiver<TaskManagerError> {}
 
 pub trait TaskManagerErrorMPSCReceiver:
-    MessageBusReceiver<TaskManagerError> + MpscMessageBus + StaticAsyncComponent {}
+    MessageBusReceiver<TaskManagerError> + MpscMessageBus + StaticAsyncComponent
+{
+}
 
 impl TaskManagerErrorMPSCReceiver for TokioMpscMessageBusReceiver<TaskManagerError> {}
 
 pub type FailedTask = (Uuid, SyncTask);
 trait FailedTaskSpmcReceiver:
-    MessageBusReceiver<FailedTask> + StaticClonableAsyncComponent + SpmcMessageBusReceiver {}
+    MessageBusReceiver<FailedTask> + StaticClonableAsyncComponent + SpmcMessageBusReceiver
+{
+}
 
 trait FailedTaskSpmcSender:
-    MessageBusSender<FailedTask> + StaticAsyncComponent + SpmcMessageBusSender<FailedTask> {}
+    MessageBusSender<FailedTask> + StaticAsyncComponent + SpmcMessageBusSender<FailedTask>
+{
+}
 
 impl FailedTaskSpmcReceiver for TokioSpmcMessageBusReceiver<FailedTask> {}
 impl FailedTaskSpmcSender for TokioSpmcMessageBusSender<FailedTask> {}
 
 pub trait FailedTaskSPMCReceiver:
-    MessageBusReceiver<FailedTask> + StaticAsyncComponent + SpmcMessageBusReceiver {
+    MessageBusReceiver<FailedTask> + StaticAsyncComponent + SpmcMessageBusReceiver
+{
     fn clone_boxed(&self) -> Box<dyn FailedTaskSPMCReceiver>;
 }
 
@@ -383,7 +413,9 @@ impl FailedTaskSPMCReceiver for TokioSpmcMessageBusReceiver<FailedTask> {
 }
 
 pub trait FailedTaskSPMCSender:
-    MessageBusSender<FailedTask> + StaticAsyncComponent + SpmcMessageBusSender<FailedTask> {}
+    MessageBusSender<FailedTask> + StaticAsyncComponent + SpmcMessageBusSender<FailedTask>
+{
+}
 
 impl FailedTaskSPMCSender for TokioSpmcMessageBusSender<FailedTask> {}
 
@@ -463,18 +495,21 @@ where
         self.error_message_channel.close();
         self.failed_task_channel.close();
     }
-    
 }
 
 #[async_trait]
-impl<T, MT, ME, MF> SyncTaskManager for TaskManager<T, MT, ME, MF>
+impl<T, MT, ME, MF> SyncTaskManager<T> for TaskManager<T, MT, ME, MF>
 where
     T: RateLimiter + 'static,
     MT: SyncTaskMPSCSender + Clone,
     ME: TaskManagerErrorMPSCSender + Clone,
     MF: FailedTaskSPMCReceiver + Clone,
 {
-    async fn add_tasks_to_plan(&mut self, plan_id: Uuid, tasks: Vec<SyncTask>) -> Result<(), TaskManagerError> {
+    async fn add_tasks_to_plan(
+        &mut self,
+        plan_id: Uuid,
+        tasks: Vec<SyncTask>,
+    ) -> Result<(), TaskManagerError> {
         self.add_tasks_to_queue(plan_id, tasks).await;
         Ok(())
     }
@@ -488,28 +523,47 @@ where
         Ok(())
     }
 
-    async fn load_sync_plan(&mut self, sync_plan: &SyncPlan) -> Result<(), TaskManagerError> {
+    async fn load_sync_plan(&mut self, sync_plan: &SyncPlan, rate_limiter: Option<T>) -> Result<(), TaskManagerError> {
         let sync_config = sync_plan.sync_config();
-        match sync_config.sync_rate_quota() {
-            Some(rate_limit) => {
-                // let rate_limiter_request: CreateRateLimiterRequest = rate_limit.into();
-                let rate_limiter = new_web_request_limiter(*rate_limit.max_request_per_minute(), Some(*rate_limit.daily_limit()), Some(*rate_limit.cooldown_seconds()));
-                let queue = SyncTaskQueue::new(sync_plan.tasks().to_vec(), Some(rate_limiter), Some(*rate_limit.max_retry()), *sync_plan.id());
+        
+        match rate_limiter {
+            Some(rate_limiter) => {
+                let quota = sync_config.sync_rate_quota()
+                    .ok_or(TaskManagerError::MissingRateLimitParam)?;
+
+                let queue = new_empty_queue(rate_limiter, Some(*quota.max_retry()), *sync_plan.id());
+                sync_plan.tasks().iter().for_each(|t| queue.push_back(t.clone()));
+                
                 self.add_queue(queue).await;
                 Ok(())
+            }
+            None => match sync_config.sync_rate_quota() {
+                None => {
+                    let queue = new_empty_queue_limitless(None, *sync_plan.id());
+                    sync_plan.tasks().iter().for_each(|t| queue.push_back(t.clone()));
+
+                    self.add_queue(queue).await;
+                    Ok(())
+                },
+                Some(_) => Err(TaskManagerError::RateLimiterNotSet(String::from("Missing rate limiter while expecting to pass one because you have specified rate quota!"))),
             },
-            None => {}
         }
-        let queue = SyncTaskQueue::new(sync_plan, self.rate_limiter.clone());
-        self.add_queue(queue).await;
-        Ok(())
     }
 
-    async fn load_sync_plans(&mut self, sync_plans: &[SyncPlan]) -> Result<(), TaskManagerError> {
-        for plan in sync_plans {
-            self.load_sync_plan(plan).await?;
+    async fn load_sync_plans(&mut self, sync_plans: &[SyncPlan], rate_limiters: Vec<Option<T>>) -> Result<(), TaskManagerError> {
+        let batch_loading_tasks = sync_plans.iter().zip(rate_limiters).map(|(plan, limiter)| {
+            self.load_sync_plan(plan, limiter)
+        });
+
+        let results: Result<Vec<_>, _> = join_all(batch_loading_tasks).await.into_iter().collect();
+
+        match results {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("{:?}", e);
+                Err(TaskManagerError::BatchPlanInsertionFailed(String::from("Batch task insertion failed due to inconsistencies between rate limit param and actual passed rate limiter type.")))
+            },
         }
-        Ok(())
     }
 
     async fn stop_sending_task(&mut self, sync_plan_id: Uuid) -> Result<(), TaskManagerError> {
@@ -543,7 +597,10 @@ where
         }
     }
 
-    async fn report_task_sending_progress(&mut self, sync_plan_id: Uuid) -> Result<TaskSendingProgress, TaskManagerError>  {
+    async fn report_task_sending_progress(
+        &mut self,
+        sync_plan_id: Uuid,
+    ) -> Result<TaskSendingProgress, TaskManagerError> {
         let queues = self.queues.read().await;
         if let Some(queue) = queues.get(&sync_plan_id) {
             let queue_lock = queue.lock().await;
@@ -552,8 +609,10 @@ where
             Err(TaskManagerError::QueueNotFound)
         }
     }
-    
-    async fn report_all_task_sending_progress(&mut self) -> Result<Vec<TaskSendingProgress>, TaskManagerError> {
+
+    async fn report_all_task_sending_progress(
+        &mut self,
+    ) -> Result<Vec<TaskSendingProgress>, TaskManagerError> {
         let queues = self.queues.read().await;
         let mut progress_reports = vec![];
         for queue in queues.values() {
@@ -562,13 +621,13 @@ where
         }
         Ok(progress_reports)
     }
-    
+
     async fn graceful_shutdown(&mut self) -> Result<(), TaskManagerError> {
         self.stop_sending_all_tasks().await?;
         self.close_all_channels();
         Ok(())
     }
-    
+
     fn force_shutdown(&mut self) {
         // Note: We are not making this method asynchronous because it's intended to be immediate.
         // It does not guarantee that all tasks are stopped, just that all queues are cleared.
@@ -724,7 +783,10 @@ where
 mod tests {
     use crate::{
         domain::synchronization::rate_limiter::{RateLimitStatus, RateLimiter},
-        domain::synchronization::{value_objects::task_spec::{RequestMethod, TaskSpecification}, sync_plan},
+        domain::synchronization::{
+            sync_plan,
+            value_objects::task_spec::{RequestMethod, TaskSpecification},
+        },
         infrastructure::{
             mq::factory::{create_tokio_mpsc_channel, create_tokio_spmc_channel},
             sync::sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter},

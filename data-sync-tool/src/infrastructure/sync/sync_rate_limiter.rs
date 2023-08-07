@@ -222,7 +222,10 @@ impl RateLimiter for WebRequestRateLimiter {
             if *remaining_minute_requests_lock <= 0 {
                 // no more requests are allowed. Should start waiting immediately
                 let cooldown_seconds_lock = self.cool_down_seconds.read().await;
-                return RateLimitStatus::RequestPerMinuteExceeded(true, (*cooldown_seconds_lock).into());
+                return RateLimitStatus::RequestPerMinuteExceeded(
+                    true,
+                    (*cooldown_seconds_lock).into(),
+                );
             }
 
             *remaining_minute_requests_lock -= 1;

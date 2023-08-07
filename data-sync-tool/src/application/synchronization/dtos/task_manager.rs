@@ -3,10 +3,13 @@
 use getset::{Getters, Setters};
 use uuid::Uuid;
 
-use crate::{infrastructure::{
-    mq::factory::{MQType, SupportedMQImpl},
-    sync::sync_rate_limiter::RateLimiterImpls,
-}, domain::synchronization::value_objects::sync_config::RateQuota};
+use crate::{
+    domain::synchronization::value_objects::sync_config::RateQuota,
+    infrastructure::{
+        mq::factory::{MQType, SupportedMQImpl},
+        sync::sync_rate_limiter::RateLimiterImpls,
+    },
+};
 
 #[derive(Getters, Setters, Default, Clone)]
 #[getset(get = "pub", set = "pub")]
@@ -25,7 +28,6 @@ impl From<&RateQuota> for CreateRateLimiterRequest {
         }
     }
 }
-
 
 #[derive(Getters, Setters, Clone)]
 #[getset(get = "pub", set = "pub")]

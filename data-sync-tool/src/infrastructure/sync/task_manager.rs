@@ -324,6 +324,10 @@ impl<T: RateLimiter> SyncTaskQueue<T> {
         return self.status == QueueStatus::Paused;
     }
 
+    pub fn is_stopped(&self) -> bool {
+        return self.status == QueueStatus::Stopped;
+    }
+
     pub fn len(&self) -> usize {
         return self.tasks.len();
     }
@@ -390,7 +394,7 @@ pub trait SyncTaskManager<T: RateLimiter> {
     async fn start_sending_all_tasks(&mut self) -> Result<(), TaskManagerError>;
 
     // stop syncing all plans
-    async fn stop_sending_all_tasks(&mut self) -> Result<(), TaskManagerError>;
+    async fn stop_sending_all_tasks(&mut self) -> Result<HashMap<Uuid, Vec<SyncTask>>, TaskManagerError>;
 
     // When need add new tasks ad hoc, use this method
     async fn add_tasks_to_plan(
@@ -518,6 +522,17 @@ pub trait FailedTaskSPMCSender:
 
 impl FailedTaskSPMCSender for TokioSpmcMessageBusSender<FailedTask> {}
 
+
+#[derive(Derivative)]
+#[derivative(Default(bound = ""))]
+#[derive(Debug, PartialEq, Eq, Clone)]
+enum TaskManagerState {
+    #[derivative(Default)]
+    Initialized,
+    Running,
+    Stopped
+}
+
 /// TaskManager
 #[derive(Derivative, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
@@ -530,10 +545,10 @@ where
 {
     // TODO: test may fail because for now queue key is changed to (qid, sync_plan_id, dataset_id)
     queues: Arc<RwLock<HashMap<QueueId, Arc<Mutex<SyncTaskQueue<T>>>>>>,
-    finished_sync_plans: Arc<Mutex<Vec<Uuid>>>,
     task_channel: MT,
     error_message_channel: ME,
     failed_task_channel: MF,
+    current_state: TaskManagerState
 }
 
 impl<T, MT, ME, MF> TaskManager<T, MT, ME, MF>
@@ -556,9 +571,9 @@ where
         Self {
             queues: Arc::new(RwLock::new(q_map)),
             task_channel,
-            finished_sync_plans: Arc::new(Mutex::new(vec![])),
             error_message_channel,
             failed_task_channel,
+            current_state: TaskManagerState::default()
         }
     }
 
@@ -577,6 +592,10 @@ where
                 q_lock.push_back(t);
             })
         }
+    }
+
+    pub fn is_running(&self) -> bool {
+        return self.current_state == TaskManagerState::Running;
     }
 
     /// Check whether all queues are empty. If so, the
@@ -615,13 +634,15 @@ where
         Ok(())
     }
 
-    async fn stop_sending_all_tasks(&mut self) -> Result<(), TaskManagerError> {
+    async fn stop_sending_all_tasks(&mut self) -> Result<HashMap<Uuid, Vec<SyncTask>>, TaskManagerError> {
         let queues = self.queues.read().await;
+        let mut unsent_tasks = HashMap::new();
         for queue in queues.values() {
             let mut queue_lock = queue.lock().await;
-            let remaining_tasks = queue_lock.drain(0..queue_lock.len()); // Drop all tasks
+            let remaining_tasks = queue_lock.drain_all(); // Drop all tasks
+            unsent_tasks.insert(*queue_lock.sync_plan_id(), remaining_tasks);
         }
-        Ok(())
+        Ok(unsent_tasks)
     }
 
     async fn load_sync_plan(&mut self, sync_plan: &SyncPlan, rate_limiter: Option<T>) -> Result<(), TaskManagerError> {
@@ -630,9 +651,10 @@ where
         match rate_limiter {
             Some(rate_limiter) => {
                 let quota = sync_config.sync_rate_quota()
+                    .as_ref()
                     .ok_or(TaskManagerError::MissingRateLimitParam)?;
 
-                let queue = new_empty_queue(rate_limiter, Some(*quota.max_retry()), *sync_plan.id());
+                let mut queue = new_empty_queue(rate_limiter, Some(*quota.max_retry()), *sync_plan.id());
                 sync_plan.tasks().iter().for_each(|t| queue.push_back(t.clone()));
                 
                 self.add_queue(queue).await;
@@ -640,7 +662,7 @@ where
             }
             None => match sync_config.sync_rate_quota() {
                 None => {
-                    let queue = new_empty_queue_limitless(None, *sync_plan.id());
+                    let mut queue = new_empty_queue_limitless(None, *sync_plan.id());
                     sync_plan.tasks().iter().for_each(|t| queue.push_back(t.clone()));
 
                     self.add_queue(queue).await;
@@ -652,25 +674,21 @@ where
     }
 
     async fn load_sync_plans(&mut self, sync_plans: &[SyncPlan], rate_limiters: Vec<Option<T>>) -> Result<(), TaskManagerError> {
-        let batch_loading_tasks = sync_plans.iter().zip(rate_limiters).map(|(plan, limiter)| {
-            self.load_sync_plan(plan, limiter)
-        });
-
-        let results: Result<Vec<_>, _> = join_all(batch_loading_tasks).await.into_iter().collect();
-
-        match results {
-            Ok(_) => Ok(()),
-            Err(e) => {
+        for (plan, limiter) in sync_plans.iter().zip(rate_limiters) {
+            let result = self.load_sync_plan(plan, limiter).await;
+            if let Err(e) = result {
                 error!("{:?}", e);
-                Err(TaskManagerError::BatchPlanInsertionFailed(String::from("Batch task insertion failed due to inconsistencies between rate limit param and actual passed rate limiter type.")))
-            },
+                return Err(TaskManagerError::BatchPlanInsertionFailed(String::from("Batch task insertion failed due to inconsistencies between rate limit param and actual passed rate limiter type.")));
+            }
         }
+
+        Ok(())
     }
 
     async fn stop_sending_task(&mut self, sync_plan_id: Uuid) -> Result<(), TaskManagerError> {
-        let queues = self.queues.write().await;
+        let queues = self.queues.read().await;
         if let Some(queue) = queues.get(&sync_plan_id) {
-            let q_lock = queue.lock().await;
+            let mut q_lock = queue.lock().await;
             q_lock.stop();
             Ok(())
         } else {
@@ -679,9 +697,9 @@ where
     }
 
     async fn stop_and_remove_sync_plan(&mut self, sync_plan_id: Uuid) -> Result<Vec<SyncTask>, TaskManagerError> {
-        let queues = self.queues.write().await;
+        let queues = self.queues.read().await;
         if let Some(queue) = queues.get(&sync_plan_id) {
-            let q_lock = queue.lock().await;
+            let mut q_lock = queue.lock().await;
             let unsent_task = q_lock.drain_all();
             Ok(unsent_task)
         } else {
@@ -742,6 +760,7 @@ where
 
     async fn graceful_shutdown(&mut self) -> Result<(), TaskManagerError> {
         info!("Trying to gracefully shutdown task manager...");
+        self.current_state = TaskManagerState::Stopped;
         self.stop_sending_all_tasks().await?;
         self.close_all_channels();
         info!("Done!");
@@ -752,6 +771,7 @@ where
         // Note: We are not making this method asynchronous because it's intended to be immediate.
         // It does not guarantee that all tasks are stopped, just that all queues are cleared.
         warn!("You are trying to forcibly shutdown task manager!");
+        self.current_state = TaskManagerState::Stopped;
         self.close_all_channels();
         let mut queues = block_on(self.queues.write());
         queues.clear();
@@ -765,6 +785,7 @@ where
         let queues = Arc::clone(&self.queues);
         let task_channel = self.task_channel.clone();
         let error_message_channel = self.error_message_channel.clone();
+        self.current_state = TaskManagerState::Running;
 
         let fetch_tasks: Vec<_> = queues.read().await
             .iter()
@@ -785,7 +806,7 @@ where
                         let mut q_lock = queue.lock().await;
                         info!("Acquired lock for queue {:?} to fetch a task", q_id);
 
-                        if q_lock.is_paused() {
+                        if q_lock.is_paused() || q_lock.is_stopped() {
                             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                         } else if q_lock.is_finished() {
                             break;
@@ -825,44 +846,33 @@ where
                                         let mut q_lock = queue.lock().await;
                                         q_lock.finished();
                                     },
-                                    QueueError::QueueFinished(reason) => {
-                                        info!("Queue {} has finished sending tasks. Dropping it...", q_id);
-
+                                    QueueError::QueueFinished(_) => {
+                                        info!("Queue {} has finished sending tasks.", q_id);
                                     },
-                                    QueueError::QueuePaused(reason) => todo!(),
-                                    QueueError::QueueStopped(reason) => todo!(),
-                                    QueueError::RateLimited(cooldown_task, seconds_left) => todo!(),
-                                    QueueError::RateLimiterError(timer_error) => todo!(),
-                                    QueueError::SendingNotStarted(reason) => todo!()
-                                    // SyncTaskQueueValue::Task(t) => {
-                                    //     if let Some(t) = t {
-                                    //         // Send the task to its consumer
-                                            
-                                    //     } else {
-                                    //         info!("Received no task from queue {:#?}!", q_id);
-                                    //     }
-                                    // },
-                                    // SyncTaskQueueValue::RateLimited(cooldown_task, time_left) => {
-                                    //     error!("Error! Rate limited! time left: {}", time_left);
-                                    //     if let Some(ct) = cooldown_task {
-                                    //         let _ = new_error_sender_channel
-                                    //         .send(TaskManagerError::RateLimited(Some(Arc::new(ct)), time_left))
-                                    //         .await;
-                                    //     }
-                                    // },
-                                    // SyncTaskQueueValue::DailyLimitExceeded => {
-                                    //     // tell task manager's consumers that daily limit is triggered
-                                    //     // TODO: figure out what to do with it? Does task manager just tell others this error or do something further?
-                                    //     error!("Error! DailyLimitExceeded!");
-                                    //     let _ = new_error_sender_channel
-                                    //         .send(TaskManagerError::DailyLimitExceeded)
-                                    //         .await;
-                                    // }
+                                    QueueError::QueuePaused(_) => {
+                                        info!("Queue {} is paused.", q_id);
+                                    },
+                                    QueueError::QueueStopped(reason) => {
+                                        info!("{}", reason);
+                                    },
+                                    QueueError::RateLimited(cooldown_task, seconds_left) => {
+                                        info!("Queue {} is rate limited. time left: {}", q_id, seconds_left);
+                                        if let Some(ct) = cooldown_task {
+                                            let _ = new_error_sender_channel
+                                            .send(TaskManagerError::RateLimited(Some(Arc::new(ct)), seconds_left))
+                                            .await;
+                                        }
+                                    },
+                                    QueueError::RateLimiterError(timer_error) => {
+                                        error!("Error happened within the rate limiter of queue {}. Error: {:?}", q_id, timer_error);
+                                    },
+                                    QueueError::SendingNotStarted(reason) => {
+                                        info!("Sending not started.. Try to restart");
+                                        let mut q_lock = queue.lock().await;
+                                        q_lock.start_sending_tasks();
+                                        drop(q_lock);
+                                    }
                                 }
-                                // let result = new_error_sender_channel.send(TaskManagerError::RateLimiterInitializationError(e)).await;
-                                // if let Err(e) = result {
-                                //     error!("{:?}",e);
-                                // }
                             }   
                         }
                         sleep(Duration::from_millis(100)).await;
@@ -876,14 +886,42 @@ where
                 })
             })
             .collect();
+        let finished_plan_cleaning_task = async {
+            while self.is_running() {
+                let queue_read_lock = self.queues.read().await;
+                let check_finished_queues = queue_read_lock
+                    .values()
+                    .into_iter()
+                    .map(|q| async {
+                        let q_lock = q.lock().await;
+                        if q_lock.is_finished() {
+                            Some(*q_lock.sync_plan_id())
+                        } else {
+                            None
+                        }
+                    });
+                let finished_queues = join_all(check_finished_queues).await;
+                drop(queue_read_lock);
 
+                info!("Trying to remove finished queue...");
+                let mut queue_write_lock = self.queues.write().await;
+                for q_id in finished_queues {
+                    if let Some(qid) = q_id {
+                        queue_write_lock.remove(&qid);
+                    }
+                }
+                drop(queue_write_lock);
+
+                sleep(Duration::from_millis(100)).await;
+            }
+        };
         let queues_ref = Arc::clone(&queues);
         let handle_failures = tokio::spawn(async move {
             loop {
                 let mut failed_task_channel_lock = failed_task_channel.lock().await;
                 let receive_result = failed_task_channel_lock.try_recv();
                 match receive_result {
-                    Ok((qid, failed_task)) => {
+                    Ok((_, failed_task)) => {
                         let queues = queues_ref.read().await;
                         let sync_plan_id = failed_task.sync_plan_id().unwrap_or(Uuid::new_v4());
                         let q_key = sync_plan_id;
@@ -910,7 +948,7 @@ where
 
         info!("Waiting for all tasks to complete.");
 
-        let _ = join!(join_all(fetch_tasks), handle_failures);
+        let _ = join!(join_all(fetch_tasks), handle_failures, finished_plan_cleaning_task);
 
         info!("Done!");
         Ok(())
@@ -1040,8 +1078,8 @@ mod tests {
     ) -> Vec<SyncTaskQueue<WebRequestRateLimiter>> {
         let queues = join_all((0..n).map(|_| async {
             let mut rng = rand::thread_rng();
-            let max_request: i64 = rng.gen_range(30..100);
-            let cooldown: i64 = rng.gen_range(1..3);
+            let max_request: u32 = rng.gen_range(30..100);
+            let cooldown: u32 = rng.gen_range(1..3);
             let limiter = new_web_request_limiter(max_request, None, Some(cooldown));
             let q = new_queue_with_random_amount_of_tasks(limiter, min_tasks, max_tasks).await;
             return q;

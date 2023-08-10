@@ -807,7 +807,7 @@ where
                         info!("Acquired lock for queue {:?} to fetch a task", q_id);
 
                         if q_lock.is_paused() || q_lock.is_stopped() {
-                            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                         } else if q_lock.is_finished() {
                             break;
                         }
@@ -875,7 +875,7 @@ where
                                 }
                             }   
                         }
-                        sleep(Duration::from_millis(100)).await;
+                        sleep(Duration::from_millis(500)).await;
                     }
                     // Recommend dropping channels explicitly!
                     drop(new_task_sender_channel);
@@ -912,7 +912,7 @@ where
                 }
                 drop(queue_write_lock);
 
-                sleep(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(500)).await;
             }
         };
         let queues_ref = Arc::clone(&queues);

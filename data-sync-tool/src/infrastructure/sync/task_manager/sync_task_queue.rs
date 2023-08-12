@@ -1,22 +1,30 @@
 /**
  * Synchronization Task Queue
- * 
+ *
  * A queue for managing sychronization task.
  */
-
 use uuid::Uuid;
 
-use crate::{domain::synchronization::{sync_task::SyncTask, rate_limiter::{RateLimiter, RateLimitStatus}}, infrastructure::sync::factory::Builder};
+use crate::{
+    domain::synchronization::{
+        rate_limiter::{RateLimitStatus, RateLimiter},
+        sync_task::SyncTask,
+    },
+    infrastructure::sync::factory::Builder,
+};
 
-use super::{errors::{CooldownTimerTask, TimeSecondLeft, QueueError}, tm_traits::TaskRequestMPMCReceiver, factory::SyncTaskQueueBuilder};
+use super::{
+    errors::{CooldownTimerTask, QueueError, TimeSecondLeft},
+    factory::SyncTaskQueueBuilder,
+    tm_traits::TaskRequestMPMCReceiver,
+};
 
 use std::{collections::VecDeque, ops::RangeBounds};
 
 use derivative::Derivative;
-use getset::{Getters, Setters, MutGetters};
-use log::{info, error};
+use getset::{Getters, MutGetters, Setters};
+use log::{error, info};
 
- 
 pub type QueueId = Uuid;
 
 // Component Definitions
@@ -113,9 +121,14 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
         let task_fetch_request_recv_result = self.task_request_receiver.receive().await;
         match task_fetch_request_recv_result {
             None => {
-                error!("Expected to receive a task request but received none in queue {}!", *self.sync_plan_id());
-                Err(QueueError::EmptyRequestReceived(String::from("Expected to receive a task request but received none!")))
-            },
+                error!(
+                    "Expected to receive a task request but received none in queue {}!",
+                    *self.sync_plan_id()
+                );
+                Err(QueueError::EmptyRequestReceived(String::from(
+                    "Expected to receive a task request but received none!",
+                )))
+            }
             Some(task_fetch_request) => {
                 if *task_fetch_request.sync_plan_id() != self.sync_plan_id {
                     return Err(QueueError::UnmatchedSyncPlanId);
@@ -123,9 +136,8 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
                     let fetch_result = self.pop_front().await;
                     return fetch_result;
                 }
-            },
+            }
         }
-
     }
 
     async fn try_fetch_task(
@@ -294,4 +306,3 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
         }
     }
 }
-

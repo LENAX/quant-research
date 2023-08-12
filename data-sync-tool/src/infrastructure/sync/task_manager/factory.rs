@@ -1,20 +1,36 @@
 use std::collections::VecDeque;
 
-use uuid::Uuid;
-use std::sync::Arc;
-use tokio::sync::RwLock;
-use std::collections::HashMap;
-use crate::{domain::synchronization::{rate_limiter::RateLimiter, sync_task::SyncTask}, application::synchronization::dtos::task_manager::CreateTaskManagerRequest, infrastructure::{sync::{sync_rate_limiter::{WebRequestRateLimiter, new_web_request_limiter}, factory::Builder}, mq::tokio_channel_mq::TokioBroadcastingMessageBusReceiver}};
 use crate::infrastructure::sync::task_manager::sync_task_queue::QueueId;
-use tokio::sync::Mutex;
 use crate::infrastructure::sync::task_manager::task_manager::TaskManagerState;
+use crate::{
+    application::synchronization::dtos::task_manager::CreateTaskManagerRequest,
+    domain::synchronization::{rate_limiter::RateLimiter, sync_task::SyncTask},
+    infrastructure::{
+        mq::tokio_channel_mq::TokioBroadcastingMessageBusReceiver,
+        sync::{
+            factory::Builder,
+            sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter},
+        },
+    },
+};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::sync::RwLock;
+use uuid::Uuid;
 
-use super::{tm_traits::{TaskRequestMPMCReceiver, SyncTaskMPMCSender, FailedTaskSPMCReceiver, TaskManagerErrorMPSCSender, GetTaskRequest}, task_manager::TaskManager, sync_task_queue::{SyncTaskQueue, QueueStatus}};
+use super::{
+    sync_task_queue::{QueueStatus, SyncTaskQueue},
+    task_manager::TaskManager,
+    tm_traits::{
+        FailedTaskSPMCReceiver, GetTaskRequest, SyncTaskMPMCSender, TaskManagerErrorMPSCSender,
+        TaskRequestMPMCReceiver,
+    },
+};
 
 /**
  * Factory methods and traits for the task manager module
  */
-
 
 // Factory Methods
 pub fn new_empty_queue<T: RateLimiter, TR: TaskRequestMPMCReceiver>(
@@ -64,8 +80,8 @@ where
         .create_task_queue_requests()
         .iter()
         .zip(task_request_receivers)
-        .map(|(req, task_request_receiver)| {
-            match req.rate_limiter_param() {
+        .map(
+            |(req, task_request_receiver)| match req.rate_limiter_param() {
                 Some(create_limiter_req) => match req.rate_limiter_impl() {
                     WebRequestRateLimiter => {
                         let rate_limiter = new_web_request_limiter(
@@ -90,18 +106,13 @@ where
                     );
                     return queue;
                 }
-        }})
+            },
+        )
         .collect();
 
-    let task_manager = TaskManager::new(
-        queues,
-        task_sender,
-        error_sender,
-        failed_task_receiver,
-    );
+    let task_manager = TaskManager::new(queues, task_sender, error_sender, failed_task_receiver);
     return task_manager;
 }
-
 
 /// Builders
 /// 1. SyncTaskQueueBuilder
@@ -159,7 +170,6 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueueBuilder<T, TR> {
     }
 }
 
-
 impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> Builder for SyncTaskQueueBuilder<T, TR> {
     type Item = SyncTaskQueue<T, TR>;
 
@@ -180,7 +190,9 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> Builder for SyncTaskQueueBuild
         SyncTaskQueue {
             sync_plan_id: self.sync_plan_id.unwrap_or_else(Uuid::new_v4),
             tasks: self.tasks.unwrap_or_else(VecDeque::new),
-            task_request_receiver: self.task_request_receiver.expect("Object implemented the TaskRequestMPMCReceiver trait is required"),
+            task_request_receiver: self
+                .task_request_receiver
+                .expect("Object implemented the TaskRequestMPMCReceiver trait is required"),
             rate_limiter: self.rate_limiter,
             max_retry: self.max_retry,
             retries_left: self.retries_left,
@@ -189,7 +201,6 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> Builder for SyncTaskQueueBuild
         }
     }
 }
-
 
 pub struct TaskManagerBuilder<T, MT, TR, ME, MF>
 where
@@ -253,8 +264,12 @@ where
         TaskManager {
             queues: self.queues.expect("queues must be set"),
             task_sender: self.task_sender.expect("task_sender must be set"),
-            error_message_channel: self.error_message_channel.expect("error_message_channel must be set"),
-            failed_task_channel: self.failed_task_channel.expect("failed_task_channel must be set"),
+            error_message_channel: self
+                .error_message_channel
+                .expect("error_message_channel must be set"),
+            failed_task_channel: self
+                .failed_task_channel
+                .expect("failed_task_channel must be set"),
             current_state: self.current_state.expect("current_state must be set"),
         }
     }
@@ -284,8 +299,12 @@ where
         TaskManager {
             queues: self.queues.expect("queues must be set"),
             task_sender: self.task_sender.expect("task_sender must be set"),
-            error_message_channel: self.error_message_channel.expect("error_message_channel must be set"),
-            failed_task_channel: self.failed_task_channel.expect("failed_task_channel must be set"),
+            error_message_channel: self
+                .error_message_channel
+                .expect("error_message_channel must be set"),
+            failed_task_channel: self
+                .failed_task_channel
+                .expect("failed_task_channel must be set"),
             current_state: self.current_state.expect("current_state must be set"),
         }
     }

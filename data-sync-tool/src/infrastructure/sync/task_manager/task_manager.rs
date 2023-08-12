@@ -2,10 +2,7 @@
 //! Defines synchronization task queue and a manager module to support task polling, scheduling and throttling.
 //!
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use derivative::Derivative;
@@ -24,17 +21,21 @@ use uuid::Uuid;
 
 use crate::{
     domain::synchronization::{
-        rate_limiter::RateLimiter,
-        sync_plan::SyncPlan,
-        sync_task::SyncTask,
+        rate_limiter::RateLimiter, sync_plan::SyncPlan, sync_task::SyncTask,
     },
     infrastructure::{mq::message_bus::MessageBusSender, sync::task_manager::errors::QueueError},
 };
 
-use super::{tm_traits::{TaskRequestMPMCReceiver, SyncTaskMPMCSender, TaskManagerErrorMPSCSender, FailedTaskSPMCReceiver, SyncTaskManager, TaskSendingProgress}, errors::TaskManagerError, factory::{new_empty_queue, new_empty_limitless_queue}};
+use super::{
+    errors::TaskManagerError,
+    factory::{new_empty_limitless_queue, new_empty_queue},
+    tm_traits::{
+        FailedTaskSPMCReceiver, SyncTaskMPMCSender, SyncTaskManager, TaskManagerErrorMPSCSender,
+        TaskRequestMPMCReceiver, TaskSendingProgress,
+    },
+};
 use crate::infrastructure::sync::task_manager::sync_task_queue::QueueId;
 use crate::infrastructure::sync::task_manager::sync_task_queue::SyncTaskQueue;
-
 
 #[derive(Derivative)]
 #[derivative(Default(bound = ""))]
@@ -45,7 +46,6 @@ pub enum TaskManagerState {
     Running,
     Stopped,
 }
-
 
 /// TaskManager
 /// TaskManger is responsible for sending tasks for each sync plan upon receiving request.
@@ -168,7 +168,7 @@ where
         &mut self,
         sync_plan: &SyncPlan,
         rate_limiter: Option<T>,
-        task_request_receiver: TR
+        task_request_receiver: TR,
     ) -> Result<(), TaskManagerError> {
         let sync_config = sync_plan.sync_config();
 
@@ -202,10 +202,16 @@ where
         &mut self,
         sync_plans: &[SyncPlan],
         rate_limiters: Vec<Option<T>>,
-        task_request_receivers: Vec<TR>
+        task_request_receivers: Vec<TR>,
     ) -> Result<(), TaskManagerError> {
-        for ((plan, limiter), task_request_receiver) in sync_plans.iter().zip(rate_limiters).zip(task_request_receivers) {
-            let result = self.load_sync_plan(plan, limiter, task_request_receiver).await;
+        for ((plan, limiter), task_request_receiver) in sync_plans
+            .iter()
+            .zip(rate_limiters)
+            .zip(task_request_receivers)
+        {
+            let result = self
+                .load_sync_plan(plan, limiter, task_request_receiver)
+                .await;
             if let Err(e) = result {
                 error!("{:?}", e);
                 return Err(TaskManagerError::BatchPlanInsertionFailed(
@@ -507,8 +513,16 @@ mod tests {
         domain::synchronization::rate_limiter::RateLimiter,
         domain::synchronization::value_objects::task_spec::{RequestMethod, TaskSpecification},
         infrastructure::{
-            mq::{factory::create_tokio_broadcasting_channel, tokio_channel_mq::{TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender}},
-            sync::{sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter}, task_manager::tm_traits::GetTaskRequest},
+            mq::{
+                factory::create_tokio_broadcasting_channel,
+                tokio_channel_mq::{
+                    TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
+                },
+            },
+            sync::{
+                sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter},
+                task_manager::tm_traits::GetTaskRequest,
+            },
         },
     };
     use log::{error, info};
@@ -601,7 +615,12 @@ mod tests {
         let mut rng = rand::thread_rng();
         let max_retry = rng.gen_range(10..20);
         let sync_plan_id = Uuid::new_v4();
-        let mut new_queue = new_empty_queue(rate_limiter, task_request_receiver, Some(max_retry), sync_plan_id);
+        let mut new_queue = new_empty_queue(
+            rate_limiter,
+            task_request_receiver,
+            Some(max_retry),
+            sync_plan_id,
+        );
         // let mut new_queue = new_empty_limitless_queue(None);
         let n_task = rng.gen_range(min_tasks..max_tasks);
         let random_tasks = generate_random_sync_tasks(n_task);
@@ -618,14 +637,23 @@ mod tests {
         channel_size: usize,
         min_tasks: u32,
         max_tasks: u32,
-    ) -> Vec<(SyncTaskQueue<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>, TokioBroadcastingMessageBusSender<GetTaskRequest>)> {
+    ) -> Vec<(
+        SyncTaskQueue<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>,
+        TokioBroadcastingMessageBusSender<GetTaskRequest>,
+    )> {
         let queues = join_all((0..n).map(|_| async {
             let mut rng = rand::thread_rng();
             let max_request: u32 = rng.gen_range(30..100);
             let cooldown: u32 = rng.gen_range(1..3);
             let limiter = new_web_request_limiter(max_request, None, Some(cooldown));
-            let (task_req_sender, task_req_receiver) = create_tokio_broadcasting_channel::<GetTaskRequest>(channel_size);
-            let q = new_queue_with_random_amount_of_tasks(limiter, task_req_receiver, min_tasks, max_tasks);
+            let (task_req_sender, task_req_receiver) =
+                create_tokio_broadcasting_channel::<GetTaskRequest>(channel_size);
+            let q = new_queue_with_random_amount_of_tasks(
+                limiter,
+                task_req_receiver,
+                min_tasks,
+                max_tasks,
+            );
             return (q, task_req_sender);
         }))
         .await;
@@ -645,15 +673,25 @@ mod tests {
         let mut rng = rand::thread_rng();
         let max_retry = rng.gen_range(10..20);
         let test_rate_limiter = WebRequestRateLimiter::new(30, None, Some(3)).unwrap();
-        let (task_req_sender, task_req_receiver) = create_tokio_broadcasting_channel::<GetTaskRequest>(100);
-        let task_queue: Arc<Mutex<SyncTaskQueue<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>>> =
-            Arc::new(Mutex::new(SyncTaskQueue::<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>::new(
-                vec![],
-                Some(test_rate_limiter),
-                Some(max_retry),
-                Uuid::new_v4(),
-                task_req_receiver
-            )));
+        let (task_req_sender, task_req_receiver) =
+            create_tokio_broadcasting_channel::<GetTaskRequest>(100);
+        let task_queue: Arc<
+            Mutex<
+                SyncTaskQueue<
+                    WebRequestRateLimiter,
+                    TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
+                >,
+            >,
+        > = Arc::new(Mutex::new(SyncTaskQueue::<
+            WebRequestRateLimiter,
+            TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
+        >::new(
+            vec![],
+            Some(test_rate_limiter),
+            Some(max_retry),
+            Uuid::new_v4(),
+            task_req_receiver,
+        )));
 
         let tasks = generate_random_sync_tasks(100);
         let first_task = tasks[0].clone();

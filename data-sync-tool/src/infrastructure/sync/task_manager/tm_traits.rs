@@ -173,7 +173,6 @@ pub struct TaskSendingProgress {
     complete_rate: f32,
 }
 
-
 #[async_trait]
 pub trait SyncTaskManager<T: RateLimiter, TR: TaskRequestMPMCReceiver> {
     // start syncing all plans by sending tasks out to workers
@@ -196,13 +195,13 @@ pub trait SyncTaskManager<T: RateLimiter, TR: TaskRequestMPMCReceiver> {
         &mut self,
         sync_plan: &SyncPlan,
         rate_limiter: Option<T>,
-        task_request_receiver: TR
+        task_request_receiver: TR,
     ) -> Result<(), TaskManagerError>;
     async fn load_sync_plans(
         &mut self,
         sync_plans: &[SyncPlan],
         rate_limiters: Vec<Option<T>>,
-        task_request_receivers: Vec<TR>
+        task_request_receivers: Vec<TR>,
     ) -> Result<(), TaskManagerError>;
 
     // stop syncing given the id, but it is resumable

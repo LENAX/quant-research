@@ -1,12 +1,27 @@
-use crate::infrastructure::{sync::workers::worker_traits::SyncWorkerDataMPSCSender, mq::message_bus::StaticClonableAsyncComponent};
+use crate::infrastructure::{
+    mq::message_bus::StaticClonableAsyncComponent,
+    sync::workers::worker_traits::SyncWorkerDataMPSCSender,
+};
 use std::{collections::HashMap, sync::Arc};
 
-use reqwest::{header::{HeaderMap, HeaderName, HeaderValue}, Client, RequestBuilder};
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue},
+    Client, RequestBuilder,
+};
 use serde_json::Value;
 
-use crate::{domain::synchronization::value_objects::task_spec::RequestMethod, infrastructure::mq::message_bus::StaticClonableMpscMQ};
+use crate::{
+    domain::synchronization::value_objects::task_spec::RequestMethod,
+    infrastructure::mq::message_bus::StaticClonableMpscMQ,
+};
 
-use super::{errors::RequestMethodNotSupported, worker::{WebsocketSyncWorker, WebAPISyncWorker}, worker_traits::{SyncWorkerMessageMPMCReceiver, SyncWorkerErrorMessageMPSCSender, ShortRunningWorker}};
+use super::{
+    errors::RequestMethodNotSupported,
+    worker::{WebAPISyncWorker, WebsocketSyncWorker},
+    worker_traits::{
+        ShortRunningWorker, SyncWorkerErrorMessageMPSCSender, SyncWorkerMessageMPMCReceiver,
+    },
+};
 
 /**
  * Factory methods, traits and builders for synchronization workers

@@ -9,24 +9,24 @@ use log::{error, info};
 use reqwest::Client;
 use serde_json::Value;
 
-
-
 use tungstenite::{connect, Message};
 use uuid::Uuid;
 
 use crate::{
-    domain::synchronization::{
-        sync_task::SyncTask,
-        value_objects::task_spec::RequestMethod,
-    },
+    domain::synchronization::{sync_task::SyncTask, value_objects::task_spec::RequestMethod},
     infrastructure::mq::message_bus::{
-            BroadcastingMessageBusReceiver, MessageBusReceiver, MessageBusSender, StaticClonableAsyncComponent, StaticClonableMpscMQ,
-        },
+        BroadcastingMessageBusReceiver, MessageBusReceiver, MessageBusSender,
+        StaticClonableAsyncComponent, StaticClonableMpscMQ,
+    },
 };
 
-use super::{errors::{SyncWorkerError}, worker_traits::{ShortRunningWorker, SyncWorker, ShortTaskHandlingWorker, LongTaskHandlingWorker}, factory::{build_request, build_headers}};
-
-
+use super::{
+    errors::SyncWorkerError,
+    factory::{build_headers, build_request},
+    worker_traits::{
+        LongTaskHandlingWorker, ShortRunningWorker, ShortTaskHandlingWorker, SyncWorker,
+    },
+};
 
 // Factory Methods
 
@@ -238,15 +238,11 @@ where
                 // let err_channel = self.error_msg_channel.read().await;
                 let _ = self
                     .inner_error_sender()?
-                    .send(SyncWorkerError::WebsocketConnectionFailed(
-                        e.to_string(),
-                    ))
+                    .send(SyncWorkerError::WebsocketConnectionFailed(e.to_string()))
                     .await;
                 // drop(err_channel);
                 self.close_all_channels();
-                return Err(SyncWorkerError::WebsocketConnectionFailed(
-                    e.to_string(),
-                ));
+                return Err(SyncWorkerError::WebsocketConnectionFailed(e.to_string()));
             }
             Ok((mut socket, _)) => {
                 let msg_body = sync_task.spec().payload();
@@ -316,9 +312,9 @@ where
                                     }
                                     Err(e) => {
                                         error!("Failed to parse text to json value");
-                                        let r = self.inner_error_sender()?.try_send(
-                                            SyncWorkerError::OtherError(e.to_string()),
-                                        );
+                                        let r = self
+                                            .inner_error_sender()?
+                                            .try_send(SyncWorkerError::OtherError(e.to_string()));
 
                                         if let Err(send_err) = r {
                                             error!("Could not send error back! {:?}", send_err);
@@ -349,7 +345,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use log::{error, info, trace, warn};
+    use log::{error, info, warn};
     use std::collections::HashMap;
     use uuid::Uuid;
 
@@ -369,14 +365,12 @@ mod tests {
             value_objects::task_spec::{RequestMethod, TaskSpecification},
         },
         infrastructure::mq::factory::{
-                    create_tokio_broadcasting_channel, create_tokio_mpsc_channel,
-                },
+            create_tokio_broadcasting_channel, create_tokio_mpsc_channel,
+        },
     };
     use serde_json::json;
     use serde_json::Value;
-    use std::fs::File;
-    use std::io::BufReader;
-    use std::io::Cursor;
+
     use std::sync::Arc;
     use url::Url;
 
@@ -461,8 +455,7 @@ mod tests {
             create_tokio_broadcasting_channel::<SyncWorkerMessage>(500);
         let mut wc_receiver2 = worker_command_receiver.clone();
 
-        let (error_sender, mut error_receiver) =
-            create_tokio_mpsc_channel::<SyncWorkerError>(500);
+        let (error_sender, mut error_receiver) = create_tokio_mpsc_channel::<SyncWorkerError>(500);
         // let error_receiver2 = error_receiver.clone();
         let mut test_worker =
             WebsocketSyncWorker::new(task_sender, worker_command_receiver, error_sender);

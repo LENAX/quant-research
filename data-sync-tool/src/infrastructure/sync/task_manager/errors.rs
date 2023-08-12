@@ -46,5 +46,5 @@ pub enum QueueError {
     QueueStopped(String),
     QueueFinished(String),
     EmptyRequestReceived(String),
-    UnmatchedSyncPlanId
+    UnmatchedSyncPlanId,
 }

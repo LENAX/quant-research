@@ -11,7 +11,6 @@ use std::{
 use tokio::{
     sync::{Mutex, RwLock},
     task::JoinHandle,
-    time::Instant,
 };
 use uuid::Uuid;
 
@@ -25,6 +24,8 @@ use crate::{
 use derivative::Derivative;
 use getset::{Getters, Setters};
 use log::{error, info};
+
+use super::factory::Builder;
 
 // Errors
 #[derive(Debug)]
@@ -74,7 +75,106 @@ pub fn create_rate_limiter(
     }
 }
 
+/// WebRequestRateLimiter Builder
+pub struct WebRequestRateLimiterBuilder {
+    id: Option<Uuid>,
+    max_minute_request: Option<u32>,
+    remaining_minute_requests: Option<u32>,
+    remaining_daily_requests: Option<u32>,
+    cool_down_seconds: Option<u32>,
+    count_down: Option<Duration>,
+    last_request_time: Option<chrono::DateTime<chrono::Local>>,
+}
+
+impl WebRequestRateLimiterBuilder {
+    pub fn id(mut self, id: Uuid) -> Self {
+        self.id = Some(id);
+        self
+    }
+
+    pub fn max_minute_request(mut self, max: u32) -> Self {
+        self.max_minute_request = Some(max);
+        self
+    }
+
+    pub fn remaining_minute_requests(mut self, remaining: u32) -> Self {
+        self.remaining_minute_requests = Some(remaining);
+        self
+    }
+
+    pub fn remaining_daily_requests(mut self, remaining: Option<u32>) -> Self {
+        self.remaining_daily_requests = remaining;
+        self
+    }
+
+    pub fn cool_down_seconds(mut self, seconds: u32) -> Self {
+        self.cool_down_seconds = Some(seconds);
+        self
+    }
+
+    pub fn count_down(mut self, duration: Option<Duration>) -> Self {
+        self.count_down = duration;
+        self
+    }
+
+    pub fn last_request_time(mut self, time: Option<chrono::DateTime<Local>>) -> Self {
+        self.last_request_time = time;
+        self
+    }
+}
+
+impl Builder for WebRequestRateLimiterBuilder {
+    type Item = WebRequestRateLimiter;
+
+    fn new() -> Self {
+        WebRequestRateLimiterBuilder {
+            id: None,
+            max_minute_request: None,
+            remaining_minute_requests: None,
+            remaining_daily_requests: None,
+            cool_down_seconds: None,
+            count_down: None,
+            last_request_time: None,
+        }
+    }
+
+    fn build(self) -> Self::Item {
+        WebRequestRateLimiter {
+            id: self.id.unwrap_or_else(Uuid::new_v4),
+            max_minute_request: Arc::new(RwLock::new(self.max_minute_request.unwrap_or(60))),
+            remaining_minute_requests: Arc::new(Mutex::new(
+                self.remaining_minute_requests.unwrap_or(60),
+            )),
+            remaining_daily_requests: Arc::new(Mutex::new(Some(
+                self.remaining_daily_requests.unwrap_or(1000),
+            ))),
+            cool_down_seconds: Arc::new(RwLock::new(self.cool_down_seconds.unwrap_or(60))),
+            count_down: Arc::new(Mutex::new(self.count_down)),
+            last_request_time: Arc::new(Mutex::new(self.last_request_time)),
+        }
+    }
+}
+
 // Component Definition
+/**
+ * WebRequestRateLimiter is an implementation of the RateLimiter trait.
+ *
+ * This component is for limiting the sending rate while requesting some external data source. It has two limits:
+ * 1. max minute request
+ * 2. max daily request
+ *
+ * The caller of WebRequestLimiter will ask if it can send a request through method `can_proceed`. WebRequestLimiter will
+ * respond with an enum RateLimitStatus. It has 3 variants: Ok(usize), RequestPerMinuteExceeded(bool, i64), RequestPerDayExceeded.
+ * If the limit is not exceeded, the variant value is Ok(usize), with the amount of requests remaining.
+ * If the minute limit is exceeded, WebRequestLimiter will reject its caller's request to send web request to the remote data source.
+ * If the daily limit is exceeded, no further request is allow until the next day.
+ *  
+ * Some background:
+ * This module is to assist requesting data source with request limits. Typically they limit users to request each api for some amount in a minute,
+ * and may have a daily request limit. If the limit is exceeded, the remote data provider may refuse to
+ * provide data for some period of time. Some time will be wasted in that case.
+ *   
+ */
 #[derive(Derivative, Debug, Clone, Getters, Setters)]
 #[derivative(Default)]
 #[getset(get = "pub")]
@@ -271,12 +371,16 @@ impl WebRequestRateLimiter {
             last_request_time: Arc::new(Mutex::new(None)),
         })
     }
+
+    pub fn builder() -> WebRequestRateLimiterBuilder {
+        return WebRequestRateLimiterBuilder::new();
+    }
 }
 
 #[cfg(test)]
 mod test {
     use futures::future::join_all;
-    use std::{cell::RefCell, env, error::Error, sync::Arc};
+    use std::{env, sync::Arc};
 
     // use log::info;
 

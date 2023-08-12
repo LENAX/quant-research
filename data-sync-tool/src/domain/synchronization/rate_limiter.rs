@@ -5,8 +5,11 @@ use tokio::task::JoinHandle;
 
 use super::custom_errors::TimerError;
 
+pub type NumRequestRemaining = u64;
+
 pub enum RateLimitStatus {
-    Ok(u64),
+    // contains the number of remaining limits
+    Ok(NumRequestRemaining),
     // contains the remaining second of recovering the limit
     // field 1: should reset timer, field 2: how many seconds are left
     RequestPerMinuteExceeded(bool, i64),

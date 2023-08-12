@@ -39,7 +39,7 @@ use super::{
     worker::{
         create_web_api_sync_workers, create_websocket_sync_workers, LongRunningWorker,
         ShortTaskHandlingWorker, SyncWorker, SyncWorkerData, SyncWorkerDataMPSCReceiver,
-        SyncWorkerErrorMessage, SyncWorkerErrorMessageMPSCReceiver, SyncWorkerMessage,
+        SyncWorkerError, SyncWorkerErrorMessageMPSCReceiver, SyncWorkerMessage,
         SyncWorkerMessageMPMCSender, WebAPISyncWorker, WebsocketSyncWorker,
     },
 };
@@ -47,7 +47,7 @@ use super::{
 type TokioExecutorChannels = (
     TokioMpscMessageBusReceiver<SyncWorkerData>,
     TokioBroadcastingMessageBusSender<SyncWorkerMessage>,
-    TokioMpscMessageBusReceiver<SyncWorkerErrorMessage>,
+    TokioMpscMessageBusReceiver<SyncWorkerError>,
     TokioMpscMessageBusReceiver<SyncTask>,
     TokioMpscMessageBusReceiver<TaskManagerError>,
     TokioSpmcMessageBusSender<FailedTask>,
@@ -62,7 +62,7 @@ pub fn create_tokio_task_executor(
         WebsocketSyncWorker<
             TokioMpscMessageBusSender<SyncWorkerData>,
             TokioBroadcastingMessageBusReceiver<SyncWorkerMessage>,
-            TokioMpscMessageBusSender<SyncWorkerErrorMessage>,
+            TokioMpscMessageBusSender<SyncWorkerError>,
         >,
         WebAPISyncWorker,
         TaskManager<
@@ -88,7 +88,7 @@ pub fn create_tokio_task_executor(
     let (sync_worker_data_sender, sync_worker_data_receiver) =
         create_tokio_mpsc_channel::<SyncWorkerData>(channel_size);
     let (sync_worker_error_sender, sync_worker_error_receiver) =
-        create_tokio_mpsc_channel::<SyncWorkerErrorMessage>(channel_size);
+        create_tokio_mpsc_channel::<SyncWorkerError>(channel_size);
 
     // create workers
     let long_running_workers = create_websocket_sync_workers(

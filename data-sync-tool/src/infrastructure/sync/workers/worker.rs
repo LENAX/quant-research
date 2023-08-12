@@ -5,278 +5,30 @@
 use async_trait::async_trait;
 use derivative::Derivative;
 use getset::{Getters, MutGetters, Setters};
-use log::{error, info, trace, warn};
-use reqwest::{Client, RequestBuilder};
+use log::{error, info};
+use reqwest::Client;
 use serde_json::Value;
-use std::{
-    borrow::Borrow,
-    collections::HashMap,
-    error::{self, Error},
-    fmt,
-    str::FromStr,
-    sync::Arc,
-};
-use tokio::sync::{Mutex, RwLock};
-use url::Url;
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+
+
 use tungstenite::{connect, Message};
 use uuid::Uuid;
 
 use crate::{
     domain::synchronization::{
-        sync_task::{SyncStatus, SyncTask},
+        sync_task::SyncTask,
         value_objects::task_spec::RequestMethod,
     },
-    infrastructure::mq::{
-        message_bus::{
-            BroadcastingMessageBusReceiver, BroadcastingMessageBusSender, MessageBus,
-            MessageBusReceiver, MessageBusSender, MpscMessageBus, StaticAsyncComponent,
-            StaticClonableAsyncComponent, StaticClonableMpscMQ, StaticMpscMQReceiver,
+    infrastructure::mq::message_bus::{
+            BroadcastingMessageBusReceiver, MessageBusReceiver, MessageBusSender, StaticClonableAsyncComponent, StaticClonableMpscMQ,
         },
-        tokio_channel_mq::{
-            TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
-            TokioMpscMessageBusReceiver, TokioMpscMessageBusSender,
-        },
-    },
 };
 
-#[derive(Derivative, Debug)]
-pub struct RequestMethodNotSupported;
-impl fmt::Display for RequestMethodNotSupported {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Request method is not supported for an http client!")
-    }
-}
+use super::{errors::{SyncWorkerError}, worker_traits::{ShortRunningWorker, SyncWorker, ShortTaskHandlingWorker, LongTaskHandlingWorker}, factory::{build_request, build_headers}};
 
-impl error::Error for RequestMethodNotSupported {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        None
-    }
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SyncWorkerErrorMessage {
-    NoDataReceived,
-    BuildRequestFailed(String),
-    JsonParseFailed(String),
-    WebRequestFailed(String),
-    WebsocketConnectionFailed(String),
-    ConnectionDroppedTimeout,
-    OtherError(String),
-    WorkerStopped,
-}
-
-#[async_trait]
-pub trait SyncWorker: Send + Sync {
-    // handles sync task, then updates its states and result
-    // async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<&mut SyncTask, Box<dyn Error>>;
-    async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), SyncWorkerErrorMessage>;
-}
-
-/// A marker trait that marks a long running worker
-pub trait LongTaskHandlingWorker {}
-
-/// A market trait for workers handling short tasks
-pub trait ShortTaskHandlingWorker {}
-pub trait ShortRunningWorker: SyncWorker + ShortTaskHandlingWorker {}
-pub trait LongRunningWorker: SyncWorker + LongTaskHandlingWorker {}
-
-trait SyncWorkerMessageBroadcastingReceiver:
-    MessageBusReceiver<SyncWorkerMessage>
-    + StaticClonableAsyncComponent
-    + BroadcastingMessageBusReceiver
-    + Clone
-{
-}
-trait SyncWorkerMessageBroadcastingSender:
-    MessageBusSender<SyncWorkerMessage>
-    + StaticClonableAsyncComponent
-    + BroadcastingMessageBusSender<SyncWorkerMessage>
-    + Clone
-{
-}
-
-trait SyncWorkerDataMpscReceiver:
-    MessageBusReceiver<SyncWorkerData> + StaticClonableMpscMQ + Clone
-{
-}
-trait SyncWorkerDataMpscSender:
-    MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ + Clone
-{
-}
-
-trait SyncWorkerErrorMessageMpscReceiver:
-    MessageBusReceiver<SyncWorkerErrorMessage> + StaticClonableMpscMQ + Clone
-{
-}
-trait SyncWorkerErrorMessageMpscSender:
-    MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ + Clone
-{
-}
-
-impl SyncWorkerDataMpscSender for TokioMpscMessageBusSender<SyncWorkerData> {}
-impl SyncWorkerErrorMessageMpscSender for TokioMpscMessageBusSender<SyncWorkerErrorMessage> {}
-
-// Try to work around the object safety restriction
-// Traits extend from Clone is not object-safe
-// Use this trait in external modules and use clone_boxed method to clone the object
-pub trait SyncWorkerMessageMPMCReceiver:
-    MessageBusReceiver<SyncWorkerMessage> + BroadcastingMessageBusReceiver + StaticAsyncComponent
-{
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCReceiver>;
-}
-pub trait SyncWorkerMessageMPMCSender:
-    MessageBusSender<SyncWorkerMessage>
-    + BroadcastingMessageBusSender<SyncWorkerMessage>
-    + StaticAsyncComponent
-{
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCSender>;
-}
-
-pub trait SyncWorkerDataMPSCReceiver:
-    MessageBusReceiver<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent
-{
-}
-pub trait SyncWorkerDataMPSCSender:
-    MessageBusSender<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent
-{
-}
-
-pub trait SyncWorkerErrorMessageMPSCReceiver:
-    MessageBusReceiver<SyncWorkerErrorMessage> + MpscMessageBus + StaticAsyncComponent
-{
-}
-
-pub trait SyncWorkerErrorMessageMPSCSender:
-    MessageBusSender<SyncWorkerErrorMessage> + MpscMessageBus + StaticAsyncComponent
-{
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerErrorMessageMPSCSender>;
-}
-
-impl SyncWorkerMessageBroadcastingReceiver
-    for TokioBroadcastingMessageBusReceiver<SyncWorkerMessage>
-{
-    // Implement the required methods
-}
-
-impl SyncWorkerDataMPSCSender for TokioMpscMessageBusSender<SyncWorkerData> {}
-impl SyncWorkerMessageMPMCReceiver for TokioBroadcastingMessageBusReceiver<SyncWorkerMessage> {
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCReceiver> {
-        Box::new(self.clone())
-    }
-}
-
-impl SyncWorkerErrorMessageMPSCSender for TokioMpscMessageBusSender<SyncWorkerErrorMessage> {
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerErrorMessageMPSCSender> {
-        Box::new(self.clone())
-    }
-    // implement the methods required by SyncWorkerErrorMessageMPSCSender here
-}
-
-impl SyncWorkerDataMPSCReceiver for TokioMpscMessageBusReceiver<SyncWorkerData> {}
-impl StaticAsyncComponent for TokioBroadcastingMessageBusSender<SyncWorkerMessage> {}
-impl SyncWorkerMessageMPMCSender for TokioBroadcastingMessageBusSender<SyncWorkerMessage> {
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCSender> {
-        Box::new(self.clone())
-    }
-}
-impl SyncWorkerErrorMessageMPSCReceiver for TokioMpscMessageBusReceiver<SyncWorkerErrorMessage> {}
 
 // Factory Methods
-fn build_headers(header_map: &HashMap<String, String>) -> HeaderMap {
-    let header: HeaderMap = header_map
-        .iter()
-        .map(|(name, val)| {
-            (
-                HeaderName::from_str(name.to_lowercase().as_str()),
-                HeaderValue::from_str(val.as_str()),
-            )
-        })
-        .filter(|(k, v)| k.is_ok() && v.is_ok())
-        .map(|(k, v)| (k.unwrap(), v.unwrap()))
-        .collect();
-    return header;
-}
-
-fn build_request(
-    http_client: &Client,
-    url: &str,
-    request_method: RequestMethod,
-    headers: Option<HeaderMap>,
-    params: Option<Arc<Value>>,
-) -> Result<RequestBuilder, RequestMethodNotSupported> {
-    match request_method {
-        RequestMethod::Get => {
-            let mut request = http_client.get(url);
-            if let Some(params) = params {
-                let new_url = format!("{}?{}", url, params);
-                request = http_client.get(new_url);
-            }
-            if let Some(headers) = headers {
-                request = request.headers(headers);
-            }
-            return Ok(request);
-        }
-        RequestMethod::Post => {
-            let mut request = http_client.post(url);
-            if let Some(headers) = headers {
-                request = request.headers(headers);
-            }
-            if let Some(params) = params {
-                let inner_value: &Value = params.borrow();
-                request = request.json(inner_value);
-            }
-            return Ok(request);
-        }
-        RequestMethod::Websocket => return Err(RequestMethodNotSupported),
-    }
-}
-
-pub fn create_websocket_sync_workers<MD, MW, ME>(
-    n: usize,
-    data_sender: MD,
-    worker_command_receiver: MW,
-    error_sender: ME,
-) -> Vec<WebsocketSyncWorker<MD, MW, ME>>
-where
-    MD: SyncWorkerDataMPSCSender + StaticClonableMpscMQ,
-    MW: SyncWorkerMessageMPMCReceiver + StaticClonableAsyncComponent,
-    ME: SyncWorkerErrorMessageMPSCSender + StaticClonableMpscMQ,
-{
-    let mut workers = Vec::new();
-    for _ in 0..n {
-        let new_worker = WebsocketSyncWorker::new(
-            data_sender.clone(),
-            worker_command_receiver.clone(),
-            error_sender.clone(),
-        );
-        workers.push(new_worker);
-    }
-    workers
-}
-
-pub fn create_web_api_sync_workers(n: usize) -> Vec<WebAPISyncWorker> {
-    let mut workers = Vec::new();
-
-    for _ in 0..n {
-        let http_client = Client::new();
-        let new_worker = WebAPISyncWorker::new(http_client);
-        workers.push(new_worker);
-    }
-    workers
-}
-
-pub fn create_short_running_workers(n: usize) -> Vec<Box<dyn ShortRunningWorker>> {
-    let mut workers: Vec<Box<dyn ShortRunningWorker>> = Vec::new();
-
-    for _ in 0..n {
-        let http_client = Client::new();
-        let new_worker = WebAPISyncWorker::new(http_client);
-        workers.push(Box::new(new_worker));
-    }
-    workers
-}
 
 #[derive(Derivative, PartialEq, Eq)]
 #[derivative(Default(bound = ""))]
@@ -300,7 +52,7 @@ impl ShortRunningWorker for WebAPISyncWorker {}
 
 #[async_trait]
 impl SyncWorker for WebAPISyncWorker {
-    async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), SyncWorkerErrorMessage> {
+    async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), SyncWorkerError> {
         self.state = WorkerState::Working;
         sync_task.start();
         let headers = build_headers(sync_task.spec().request_header());
@@ -330,7 +82,7 @@ impl SyncWorker for WebAPISyncWorker {
                                     .finished();
                             }
                             Err(e) => {
-                                return Err(SyncWorkerErrorMessage::JsonParseFailed(e.to_string()));
+                                return Err(SyncWorkerError::JsonParseFailed(e.to_string()));
                             }
                         }
                         return Ok(());
@@ -342,19 +94,19 @@ impl SyncWorker for WebAPISyncWorker {
                             .set_end_time(Some(chrono::offset::Local::now()))
                             .set_result_message(Some(e.to_string()))
                             .failed();
-                        return Err(SyncWorkerErrorMessage::WebRequestFailed(e.to_string()));
+                        return Err(SyncWorkerError::WebRequestFailed(e.to_string()));
                     }
                 }
             }
             Err(e) => {
-                return Err(SyncWorkerErrorMessage::BuildRequestFailed(e.to_string()));
+                return Err(SyncWorkerError::BuildRequestFailed(e.to_string()));
             }
         }
     }
 }
 
 impl WebAPISyncWorker {
-    fn new(http_client: Client) -> WebAPISyncWorker {
+    pub fn new(http_client: Client) -> WebAPISyncWorker {
         return Self {
             state: WorkerState::Sleeping,
             http_client,
@@ -394,7 +146,7 @@ where
     MW: MessageBusReceiver<SyncWorkerMessage>
         + StaticClonableAsyncComponent
         + BroadcastingMessageBusReceiver,
-    ME: MessageBusReceiver<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
+    ME: MessageBusReceiver<SyncWorkerError> + StaticClonableMpscMQ,
 {
 }
 
@@ -404,9 +156,9 @@ where
     MW: MessageBusReceiver<SyncWorkerMessage>
         + StaticClonableAsyncComponent
         + BroadcastingMessageBusReceiver,
-    ME: MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
+    ME: MessageBusSender<SyncWorkerError> + StaticClonableMpscMQ,
 {
-    fn new(
+    pub fn new(
         data_sender: MD,
         worker_command_receiver: MW,
         error_sender: ME,
@@ -420,7 +172,7 @@ where
         };
     }
 
-    fn close_all_channels(&mut self) {
+    pub fn close_all_channels(&mut self) {
         info!("Closing data sender channel...");
         self.data_sender = None;
         info!("Done! Closing worker_command_receiver channel...");
@@ -431,30 +183,30 @@ where
         info!("All channel has closed.");
     }
 
-    fn inner_data_sender(&self) -> Result<&MD, SyncWorkerErrorMessage> {
+    pub fn inner_data_sender(&self) -> Result<&MD, SyncWorkerError> {
         if self.state == WorkerState::Stopped {
-            return Err(SyncWorkerErrorMessage::WorkerStopped);
+            return Err(SyncWorkerError::WorkerStopped);
         }
         match self.data_sender() {
             Some(_inner_sender) => Ok(_inner_sender),
-            None => Err(SyncWorkerErrorMessage::WorkerStopped),
+            None => Err(SyncWorkerError::WorkerStopped),
         }
     }
 
-    fn inner_command_receiver(&mut self) -> Result<&mut MW, SyncWorkerErrorMessage> {
+    pub fn inner_command_receiver(&mut self) -> Result<&mut MW, SyncWorkerError> {
         if self.state == WorkerState::Stopped {
-            return Err(SyncWorkerErrorMessage::WorkerStopped);
+            return Err(SyncWorkerError::WorkerStopped);
         }
         match self.worker_command_receiver_mut() {
             Some(_inner_sender) => Ok(_inner_sender),
-            None => Err(SyncWorkerErrorMessage::WorkerStopped),
+            None => Err(SyncWorkerError::WorkerStopped),
         }
     }
 
-    fn inner_error_sender(&self) -> Result<&ME, SyncWorkerErrorMessage> {
+    pub fn inner_error_sender(&self) -> Result<&ME, SyncWorkerError> {
         match self.error_sender() {
             Some(_inner_sender) => Ok(_inner_sender),
-            None => Err(SyncWorkerErrorMessage::WorkerStopped),
+            None => Err(SyncWorkerError::WorkerStopped),
         }
     }
 }
@@ -466,14 +218,14 @@ where
     MW: MessageBusReceiver<SyncWorkerMessage>
         + StaticClonableAsyncComponent
         + BroadcastingMessageBusReceiver,
-    ME: MessageBusSender<SyncWorkerErrorMessage> + StaticClonableMpscMQ,
+    ME: MessageBusSender<SyncWorkerError> + StaticClonableMpscMQ,
 {
-    async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), SyncWorkerErrorMessage> {
+    async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), SyncWorkerError> {
         self.state = WorkerState::Working;
         sync_task.start();
         if *sync_task.spec().request_method() != RequestMethod::Websocket {
             self.state = WorkerState::Sleeping;
-            return Err(SyncWorkerErrorMessage::BuildRequestFailed(String::from(
+            return Err(SyncWorkerError::BuildRequestFailed(String::from(
                 "Request method not supported!",
             )));
         }
@@ -486,13 +238,13 @@ where
                 // let err_channel = self.error_msg_channel.read().await;
                 let _ = self
                     .inner_error_sender()?
-                    .send(SyncWorkerErrorMessage::WebsocketConnectionFailed(
+                    .send(SyncWorkerError::WebsocketConnectionFailed(
                         e.to_string(),
                     ))
                     .await;
                 // drop(err_channel);
                 self.close_all_channels();
-                return Err(SyncWorkerErrorMessage::WebsocketConnectionFailed(
+                return Err(SyncWorkerError::WebsocketConnectionFailed(
                     e.to_string(),
                 ));
             }
@@ -565,7 +317,7 @@ where
                                     Err(e) => {
                                         error!("Failed to parse text to json value");
                                         let r = self.inner_error_sender()?.try_send(
-                                            SyncWorkerErrorMessage::OtherError(e.to_string()),
+                                            SyncWorkerError::OtherError(e.to_string()),
                                         );
 
                                         if let Err(send_err) = r {
@@ -579,7 +331,7 @@ where
                             error!("Failed to read data from socket! error: {}", e);
                             let _ = self
                                 .inner_error_sender()?
-                                .send(SyncWorkerErrorMessage::NoDataReceived)
+                                .send(SyncWorkerError::NoDataReceived)
                                 .await;
                         }
                     }
@@ -602,10 +354,7 @@ mod tests {
     use uuid::Uuid;
 
     use env_logger;
-    use env_logger::Builder;
-    use log::LevelFilter;
     use std::env;
-    use std::io::Write;
 
     use chrono::Local;
     use fake::faker::internet::en::SafeEmail;
@@ -619,16 +368,9 @@ mod tests {
             sync_task::SyncTask,
             value_objects::task_spec::{RequestMethod, TaskSpecification},
         },
-        infrastructure::{
-            mq::{
-                factory::{
-                    create_tokio_broadcasting_channel, create_tokio_mpsc_channel, get_mq_factory,
-                    MQType, SupportedMQImpl,
+        infrastructure::mq::factory::{
+                    create_tokio_broadcasting_channel, create_tokio_mpsc_channel,
                 },
-                message_bus::MessageBus,
-            },
-            sync::worker::{build_headers, build_request, SyncWorker, WebAPISyncWorker},
-        },
     };
     use serde_json::json;
     use serde_json::Value;
@@ -720,7 +462,7 @@ mod tests {
         let mut wc_receiver2 = worker_command_receiver.clone();
 
         let (error_sender, mut error_receiver) =
-            create_tokio_mpsc_channel::<SyncWorkerErrorMessage>(500);
+            create_tokio_mpsc_channel::<SyncWorkerError>(500);
         // let error_receiver2 = error_receiver.clone();
         let mut test_worker =
             WebsocketSyncWorker::new(task_sender, worker_command_receiver, error_sender);

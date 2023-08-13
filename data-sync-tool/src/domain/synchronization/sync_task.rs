@@ -2,6 +2,7 @@
 // Defines the runtime status and task spec of a synchronization process
 
 use chrono::prelude::*;
+use log::info;
 // use fake::{ Fake};
 use super::{
     sync_plan::CreateTaskRequest,
@@ -39,6 +40,7 @@ pub struct SyncTask {
     end_time: Option<DateTime<Local>>,
     create_time: DateTime<Local>,
     spec: TaskSpecification, // data payload and specification of the task
+    n_retry_left: usize,
     result: Option<Value>,
     result_message: Option<String>,
 }
@@ -61,6 +63,7 @@ impl SyncTask {
         datasource_name: &str,
         task_spec: TaskSpecification,
         sync_plan_id: Uuid,
+        n_retry_left: Option<usize>
     ) -> Self {
         let mut new_task = Self::default();
         new_task
@@ -70,7 +73,9 @@ impl SyncTask {
             .set_dataset_name(Some(dataset_name.to_string()))
             .set_datasource_name(Some(datasource_name.to_string()))
             .set_spec(task_spec)
-            .set_create_time(Local::now());
+            .set_status(SyncStatus::Created)
+            .set_create_time(Local::now())
+            .set_n_retry_left(n_retry_left.unwrap_or(10));
         return new_task;
     }
 
@@ -89,25 +94,40 @@ impl SyncTask {
     }
 
     /// Set task to running status
-    pub fn start(&mut self) -> SyncStatus {
+    pub fn start(&mut self, start_time: DateTime<Local>) -> SyncStatus {
         self.set_status(SyncStatus::Running);
+        self.set_start_time(start_time);
+        info!("Task {} started at {}", self.id, self.start_time());
         return self.status;
     }
 
     /// Set task to paused status
-    pub fn cancel(&mut self) -> SyncStatus {
+    pub fn cancel(&mut self, end_time: DateTime<Local>) -> SyncStatus {
         self.set_status(SyncStatus::Cancelled);
+        self.set_end_time(Some(end_time));
+        info!("Task {} cancelled at {}", self.id, end_time);
         return self.status;
     }
 
-    pub fn failed(&mut self) -> SyncStatus {
+    pub fn failed(&mut self, end_time: DateTime<Local>) -> SyncStatus {
         self.set_status(SyncStatus::Failed);
+        self.set_end_time(Some(end_time));
+
+        if self.n_retry_left > 0 {
+            self.n_retry_left -= 1;
+            info!("Task {} has {} retries left", self.id, self.n_retry_left);
+        } else {
+            info!("Task {} has no retry left!", self.id);
+        }
+
         return self.status;
     }
 
     /// Set task to finished status
-    pub fn finished(&mut self) -> SyncStatus {
+    pub fn finished(&mut self, end_time: DateTime<Local>) -> SyncStatus {
         self.set_status(SyncStatus::Finished);
+        self.set_end_time(Some(end_time));
+        info!("Task {} finished at {}", self.id, end_time);
         return self.status;
     }
 }

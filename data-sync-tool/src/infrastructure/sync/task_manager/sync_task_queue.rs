@@ -10,13 +10,12 @@ use crate::{
         rate_limiter::{RateLimitStatus, RateLimiter},
         sync_task::SyncTask,
     },
-    infrastructure::sync::factory::Builder,
+    infrastructure::sync::{factory::Builder, shared_traits::TaskRequestMPMCReceiver},
 };
 
 use super::{
     errors::{CooldownTimerTask, QueueError, TimeSecondLeft},
     factory::SyncTaskQueueBuilder,
-    tm_traits::TaskRequestMPMCReceiver,
 };
 
 use std::{collections::VecDeque, ops::RangeBounds};

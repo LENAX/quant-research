@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+use crate::infrastructure::sync::GetTaskRequest;
+use crate::infrastructure::sync::shared_traits::{SyncTaskMPMCSender, TaskRequestMPMCReceiver, FailedTaskSPMCReceiver};
 use crate::infrastructure::sync::task_manager::sync_task_queue::QueueId;
 use crate::infrastructure::sync::task_manager::task_manager::TaskManagerState;
 use crate::{
@@ -22,10 +24,7 @@ use uuid::Uuid;
 use super::{
     sync_task_queue::{QueueStatus, SyncTaskQueue},
     task_manager::TaskManager,
-    tm_traits::{
-        FailedTaskSPMCReceiver, GetTaskRequest, SyncTaskMPMCSender, TaskManagerErrorMPSCSender,
-        TaskRequestMPMCReceiver,
-    },
+    tm_traits::TaskManagerErrorMPSCSender,
 };
 
 /**
@@ -60,15 +59,15 @@ pub fn create_sync_task_manager<
     T: RateLimiter + 'static,
     MT: SyncTaskMPMCSender,
     TR: TaskRequestMPMCReceiver,
-    ME: TaskManagerErrorMPSCSender,
+    ES: TaskManagerErrorMPSCSender,
     MF: FailedTaskSPMCReceiver,
 >(
     create_request: &CreateTaskManagerRequest,
     task_sender: MT,
     task_request_receivers: Vec<TR>,
-    error_sender: ME,
+    error_sender: ES,
     failed_task_receiver: MF,
-) -> TaskManager<WebRequestRateLimiter, MT, TR, ME, MF>
+) -> TaskManager<WebRequestRateLimiter, MT, TR, ES, MF>
 where
     Vec<SyncTaskQueue<T, TR>>: FromIterator<
         SyncTaskQueue<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>,
@@ -196,33 +195,33 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> Builder for SyncTaskQueueBuild
             rate_limiter: self.rate_limiter,
             max_retry: self.max_retry,
             retries_left: self.retries_left,
-            status: self.status.unwrap_or(QueueStatus::Inactive),
+            status: self.status.unwrap_or(QueueStatus::default()),
             initial_size: self.initial_size.unwrap_or(0),
         }
     }
 }
 
-pub struct TaskManagerBuilder<T, MT, TR, ME, MF>
+pub struct TaskManagerBuilder<T, MT, TR, ES, MF>
 where
     T: RateLimiter,
     MT: SyncTaskMPMCSender,
     TR: TaskRequestMPMCReceiver,
-    ME: TaskManagerErrorMPSCSender,
+    ES: TaskManagerErrorMPSCSender,
     MF: FailedTaskSPMCReceiver,
 {
     queues: Option<Arc<RwLock<HashMap<QueueId, Arc<Mutex<SyncTaskQueue<T, TR>>>>>>>,
     task_sender: Option<MT>,
-    error_message_channel: Option<ME>,
+    error_message_channel: Option<ES>,
     failed_task_channel: Option<MF>,
     current_state: Option<TaskManagerState>,
 }
 
-impl<T, MT, TR, ME, MF> TaskManagerBuilder<T, MT, TR, ME, MF>
+impl<T, MT, TR, ES, MF> TaskManagerBuilder<T, MT, TR, ES, MF>
 where
     T: RateLimiter,
     MT: SyncTaskMPMCSender,
     TR: TaskRequestMPMCReceiver,
-    ME: TaskManagerErrorMPSCSender,
+    ES: TaskManagerErrorMPSCSender,
     MF: FailedTaskSPMCReceiver,
 {
     pub fn new() -> Self {
@@ -245,7 +244,7 @@ where
         self
     }
 
-    pub fn error_message_channel(mut self, channel: ME) -> Self {
+    pub fn error_message_channel(mut self, channel: ES) -> Self {
         self.error_message_channel = Some(channel);
         self
     }
@@ -260,7 +259,7 @@ where
         self
     }
 
-    pub fn build(self) -> TaskManager<T, MT, TR, ME, MF> {
+    pub fn build(self) -> TaskManager<T, MT, TR, ES, MF> {
         TaskManager {
             queues: self.queues.expect("queues must be set"),
             task_sender: self.task_sender.expect("task_sender must be set"),
@@ -275,15 +274,15 @@ where
     }
 }
 
-impl<T, MT, TR, ME, MF> Builder for TaskManagerBuilder<T, MT, TR, ME, MF>
+impl<T, MT, TR, ES, MF> Builder for TaskManagerBuilder<T, MT, TR, ES, MF>
 where
     T: RateLimiter,
     MT: SyncTaskMPMCSender,
     TR: TaskRequestMPMCReceiver,
-    ME: TaskManagerErrorMPSCSender,
+    ES: TaskManagerErrorMPSCSender,
     MF: FailedTaskSPMCReceiver,
 {
-    type Item = TaskManager<T, MT, TR, ME, MF>;
+    type Item = TaskManager<T, MT, TR, ES, MF>;
 
     fn new() -> Self {
         TaskManagerBuilder {

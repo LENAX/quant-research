@@ -30,4 +30,11 @@ pub enum SyncWorkerError {
     ConnectionDroppedTimeout,
     OtherError(String),
     WorkerStopped,
+    NoTaskAssigned,
+    NoTaskReceived,
+    SendTaskRequestFailed(String),
+    CompleteTaskSendFailed,
+    ResendTaskFailed,
+    WSReadError(String),
+    WSStreamDataSendFailed(String)
 }

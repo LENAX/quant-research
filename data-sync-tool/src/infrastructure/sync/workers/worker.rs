@@ -6,55 +6,138 @@ use async_trait::async_trait;
 use derivative::Derivative;
 use getset::{Getters, MutGetters, Setters};
 use log::{error, info};
-use reqwest::Client;
+use reqwest::{Client, RequestBuilder};
 use serde_json::Value;
-
+use tokio::time::{sleep, Duration};
 use tungstenite::{connect, Message};
+use url::Url;
 use uuid::Uuid;
+use chrono::offset::Local;
 
 use crate::{
     domain::synchronization::{sync_task::SyncTask, value_objects::task_spec::RequestMethod},
-    infrastructure::mq::message_bus::{
-        BroadcastingMessageBusReceiver, MessageBusReceiver, MessageBusSender,
-        StaticClonableAsyncComponent, StaticClonableMpscMQ,
-    },
+    infrastructure::{mq::message_bus::{
+        MessageBusReceiver, MessageBusSender,
+        MessageBusError,
+    }, sync::{shared_traits::{SyncTaskMPMCReceiver, SyncTaskMPMCSender, StreamingDataMPMCSender, SyncWorkerErrorMPMCSender, TaskRequestMPMCSender, StreamingData}, GetTaskRequest}},
 };
 
 use super::{
     errors::SyncWorkerError,
-    factory::{build_headers, build_request},
+    factory::{build_headers, build_request, WebAPISyncWorkerBuilder},
     worker_traits::{
-        LongTaskHandlingWorker, ShortRunningWorker, ShortTaskHandlingWorker, SyncWorker,
+        LongTaskHandlingWorker, ShortRunningWorker, ShortTaskHandlingWorker, SyncWorker
     },
 };
 
 // Factory Methods
 
-#[derive(Derivative, PartialEq, Eq)]
+#[derive(Derivative, PartialEq, Eq, Clone, Copy)]
 #[derivative(Default(bound = ""))]
 pub enum WorkerState {
     #[derivative(Default)]
-    Sleeping,
+    // start with this state
+    // change from working to Idle when `pause` is called 
+    Idle,
+    // Becomes working state when `start_sync` is called
     Working,
+    // Becomes this state when `stop` is called
     Stopped,
 }
 
+/**
+ * WebAPISyncWorker
+ * A type of worker that requests for data by sending get or post requests
+ */
 #[derive(Derivative, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
-pub struct WebAPISyncWorker {
+pub struct WebAPISyncWorker<TRS: TaskRequestMPMCSender,
+                            TTR: SyncTaskMPMCReceiver,
+                            CTS: SyncTaskMPMCSender,
+                            FTS: SyncTaskMPMCSender> {
+    id: Uuid,
     state: WorkerState,
     http_client: Client,
+    task_request_sender: TRS,
+    todo_task_receiver: TTR,
+    completed_task_sender: CTS,
+    failed_task_sender: FTS,
+    assigned_sync_plan_id: Option<Uuid>
 }
 
-/// WebAPISyncWorker is a ShortTaskHandlingWorker
-impl ShortTaskHandlingWorker for WebAPISyncWorker {}
-impl ShortRunningWorker for WebAPISyncWorker {}
+impl<TRS, TTR, CTS, FTS> WebAPISyncWorker<TRS, TTR, CTS, FTS>
+where
+    TRS: TaskRequestMPMCSender,
+    TTR: SyncTaskMPMCReceiver,
+    CTS: SyncTaskMPMCSender,
+    FTS: SyncTaskMPMCSender
+{
+    pub fn new(
+        http_client: Client,
+        task_request_sender: TRS,
+        todo_task_receiver: TTR,
+        completed_task_sender: CTS,
+        failed_task_sender: FTS
+    ) -> WebAPISyncWorker<TRS, TTR, CTS, FTS> {
+        return Self {
+            id: Uuid::new_v4(),
+            state: WorkerState::default(),
+            http_client,
+            task_request_sender,
+            todo_task_receiver,
+            completed_task_sender,
+            failed_task_sender,
+            assigned_sync_plan_id: None
+        };
+    }
 
-#[async_trait]
-impl SyncWorker for WebAPISyncWorker {
-    async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), SyncWorkerError> {
-        self.state = WorkerState::Working;
-        sync_task.start();
+    pub fn builder() -> WebAPISyncWorkerBuilder<TRS, TTR, CTS, FTS> {
+        WebAPISyncWorkerBuilder::new()
+    }
+
+    async fn request_task(&mut self) -> Result<SyncTask, SyncWorkerError> {
+        if !self.is_busy() {
+            return Err(SyncWorkerError::NoTaskAssigned);
+        }
+
+        let plan_id = self.assigned_sync_plan_id.expect("Why plan id is missing?");
+        let task_request = GetTaskRequest::new(plan_id);
+        let req_result = self.task_request_sender.send(task_request).await;
+
+        match req_result {
+            Err(e) => {
+                match e {
+                    MessageBusError::SendFailed(_, _) => {
+                        error!("Worker {} failed to request a task!", self.id);
+                        return Err(SyncWorkerError::SendTaskRequestFailed(format!("Worker {} failed to request a task!", self.id)));
+                    },
+                    MessageBusError::SenderClosed => {
+                        error!("Worker {}'s request sender channel is closed unexpectedly!", self.id);
+                        return Err(SyncWorkerError::SendTaskRequestFailed(format!("Worker {}'s request sender channel is closed unexpectedly!", self.id)));
+                    },
+                    _ => {
+                        error!("Worker {} failed to request a task!", self.id);
+                        return Err(SyncWorkerError::SendTaskRequestFailed(format!("Worker {} failed to request a task!", self.id)));
+                    }
+                }
+            },
+            Ok(()) => {
+                let todo_task_receive_result = self.todo_task_receiver.receive().await;
+                match todo_task_receive_result {
+                    None => {
+                        error!("No task received in worker {}", self.id);
+                        return Err(SyncWorkerError::NoTaskAssigned);
+                    },
+                    Some(task) => {
+                        info!("Worker {} received 1 task.", self.id);
+                        return Ok(task);
+                    }
+                }
+            }
+        }
+    }
+
+    fn build_request_header(&self, sync_task: &SyncTask) -> Result<RequestBuilder, SyncWorkerError> {
         let headers = build_headers(sync_task.spec().request_header());
         let build_request_result = build_request(
             &self.http_client,
@@ -63,11 +146,24 @@ impl SyncWorker for WebAPISyncWorker {
             Some(headers),
             sync_task.spec().payload().clone(),
         );
-
+        
         match build_request_result {
+            Err(e) => {
+                return Err(SyncWorkerError::BuildRequestFailed(e.to_string()));
+            },
+            Ok(request) => {
+                return Ok(request);
+            }
+        }
+    }
+
+    async fn execute_task<'a>(&'a self, sync_task: &'a mut SyncTask) -> Result<&mut SyncTask, SyncWorkerError> {
+        sync_task.start(Local::now());
+        let build_req_result = self.build_request_header(sync_task);
+
+        match build_req_result {
             Ok(request) => {
                 let resp = request.send().await;
-
                 match resp {
                     Ok(resp) => {
                         info!("status: {}", resp.status());
@@ -75,115 +171,358 @@ impl SyncWorker for WebAPISyncWorker {
 
                         match parse_result {
                             Ok(json_value) => {
-                                self.state = WorkerState::Sleeping;
                                 sync_task
                                     .set_result(Some(json_value))
-                                    .set_end_time(Some(chrono::offset::Local::now()))
-                                    .finished();
+                                    .finished(Local::now());
+                                return Ok(sync_task);
                             }
                             Err(e) => {
+                                sync_task
+                                    .set_result_message(Some(e.to_string()))
+                                    .failed(Local::now());
                                 return Err(SyncWorkerError::JsonParseFailed(e.to_string()));
                             }
                         }
-                        return Ok(());
                     }
                     Err(e) => {
                         error!("error: {}", e);
-                        self.state = WorkerState::Sleeping;
                         sync_task
-                            .set_end_time(Some(chrono::offset::Local::now()))
                             .set_result_message(Some(e.to_string()))
-                            .failed();
+                            .failed(Local::now());
                         return Err(SyncWorkerError::WebRequestFailed(e.to_string()));
                     }
                 }
-            }
+            },
             Err(e) => {
-                return Err(SyncWorkerError::BuildRequestFailed(e.to_string()));
-            }
+                error!("Failed to build request! Reason: {:?}", e);
+                sync_task
+                    .set_result_message(Some(format!("Failed to build request! Reason: {:?}", e)))
+                    .failed(Local::now());
+                return Err(e);
+            },
         }
     }
-}
 
-impl WebAPISyncWorker {
-    pub fn new(http_client: Client) -> WebAPISyncWorker {
-        return Self {
-            state: WorkerState::Sleeping,
-            http_client,
-        };
+    async fn send_completed_task(&self, completed_task: SyncTask, n_retry: Option<usize>) -> Result<(), SyncWorkerError> {
+        for i in 0..n_retry.unwrap_or(5) {
+            let send_result = self.completed_task_sender.send(completed_task.clone()).await;
+            match send_result {
+                Ok(()) => {
+                    info!("Successfully sent finished task {} in worker {}!", completed_task.id(), self.id);
+                    return Ok(());
+                }
+                Err(e) => {
+                    error!("Failed to send finished task {} in worker {}! Reason: {:?}.", completed_task.id(), self.id(), e);
+                }
+            }
+        }
+        error!("Task {} is discarded.", completed_task.id());
+        Err(SyncWorkerError::CompleteTaskSendFailed)
+    }
+
+    async fn send_failed_task(&self, failed_task: SyncTask, n_retry: Option<usize>) -> Result<(), SyncWorkerError> {
+        let task_id = *failed_task.id();
+        for i in 0..n_retry.unwrap_or(5) {
+            let send_result = self.failed_task_sender.send(failed_task.clone()).await;
+            if let Ok(()) = send_result {
+                info!("Successfully sent failed task {} back to retry", task_id);
+                return Ok(());
+            } else {
+                error!("Failed to send back failed task in worker {}! Reason: {:?}. Discard task {}..", self.id(), send_result, task_id);
+            }
+        }
+        Err(SyncWorkerError::ResendTaskFailed)
+    }
+
+    async fn handle_send_failed_task(&self, task: SyncTask) -> Result<(), SyncWorkerError> {
+        if let Err(_) = self.send_failed_task(task, Some(5)).await {
+            error!("Skipped task because worker {} cannot send it back", self.id);
+            // Optionally, you can return the error here if necessary
+            // return Err(some_error);
+        }
+        Ok(())
+    }
+
+    fn start_working(&mut self, sync_plan_id: Uuid) {
+        self.state = WorkerState::Working;
+        self.assigned_sync_plan_id = Some(sync_plan_id);
+        info!("Worker {} starts working on plan {}... at {}", self.id, sync_plan_id, Local::now());
+    }
+
+    fn wait(&mut self) {
+        self.state = WorkerState::Idle;
+        info!("Worker {} starts waiting... at {}", self.id, Local::now());
+    }
+
+    fn stop(&mut self) {
+        self.state = WorkerState::Stopped;
+        self.assigned_sync_plan_id = None;
+        info!("Worker {} stops working... at {}", self.id, Local::now());
+    }
+
+    fn is_busy(&self) -> bool {
+        let busy_state = self.state == WorkerState::Working && self.assigned_sync_plan_id != None;
+        info!("Is worker {} busy? {}", self.id, busy_state);
+        return busy_state;
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum SyncWorkerData {
-    Data(Value),
-    StopCommandReceived,
+/// WebAPISyncWorker is a ShortTaskHandlingWorker
+impl<TRS, TTR, CTS, FTS> ShortTaskHandlingWorker for WebAPISyncWorker<TRS, TTR, CTS, FTS>
+where
+    TRS: TaskRequestMPMCSender,
+    TTR: SyncTaskMPMCReceiver,
+    CTS: SyncTaskMPMCSender,
+    FTS: SyncTaskMPMCSender
+{}
+
+impl<TRS, TTR, CTS, FTS> ShortRunningWorker for WebAPISyncWorker<TRS, TTR, CTS, FTS>
+where
+    TRS: TaskRequestMPMCSender,
+    TTR: SyncTaskMPMCReceiver,
+    CTS: SyncTaskMPMCSender,
+    FTS: SyncTaskMPMCSender
+{}
+
+#[async_trait]
+impl<TRS, TTR, CTS, FTS> SyncWorker for WebAPISyncWorker<TRS, TTR, CTS, FTS>
+where
+    TRS: TaskRequestMPMCSender,
+    TTR: SyncTaskMPMCReceiver,
+    CTS: SyncTaskMPMCSender,
+    FTS: SyncTaskMPMCSender
+{
+    async fn start_sync(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError> {
+        self.start_working(*sync_plan_id);
+
+        while self.is_busy() {
+            // request a task
+            let task_request_result = self.request_task().await;
+            match task_request_result {
+                Ok(mut task) => {
+                    let result = self.execute_task(&mut task).await;
+                    match result {
+                        Ok(finished_task) => {
+                            let send_result = self.send_completed_task(finished_task.clone(), Some(5)).await;
+                            if send_result.is_err() {
+                                error!("Cannot send task! Discarded.");
+                            }
+                        },
+                        Err(e) => {
+                            match e {
+                                SyncWorkerError::BuildRequestFailed(build_err) => {
+                                    error!("Failed to build request header in worker {}", self.id);
+                                    self.wait();
+                                    return Err(SyncWorkerError::BuildRequestFailed(build_err));
+                                },
+                                SyncWorkerError::ConnectionDroppedTimeout => {
+                                    error!("Connection timed out while requesting data for plan {:?}.", self.assigned_sync_plan_id());
+                                    let _ = self.handle_send_failed_task(task).await;
+                                },
+                                SyncWorkerError::JsonParseFailed(reason) => {
+                                    error!("Failed to parse result in worker {}. Reason: {}", self.id, reason);
+                                    let _ = self.handle_send_failed_task(task).await;
+                                },
+                                SyncWorkerError::NoDataReceived => {
+                                    error!("No data received while executing task {} in worker {}.", task.id(), self.id);
+                                    let _ = self.handle_send_failed_task(task).await;
+                                },
+                                SyncWorkerError::WebRequestFailed(reason) => {
+                                    error!("WebRequestFailed while executing task {} in worker {}.", task.id(), self.id);
+                                    let _ = self.handle_send_failed_task(task).await;
+                                },
+                                SyncWorkerError::WorkerStopped => {
+                                    error!("Worker {} is asked to stop!", self.id);
+                                    return Err(e);
+                                },
+                                _ => {
+                                    error!("Encountered error: {:?}", e);
+                                    self.wait();
+                                    return Err(e);
+                                }
+                            }
+                        } 
+                    }
+                },
+                Err(e) => {
+                    error!("Failed to fetch task in worker {}! Reason: {:?}", self.id, e);
+                }
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+
+        // for compilation purpose
+        Ok(())     
+    }
+
+    fn pause(&mut self) -> Result<(), SyncWorkerError> {
+        Ok(self.wait())
+    }
+
+    fn stop(&mut self) -> Result<(), SyncWorkerError> {
+        Ok(self.stop())
+    }
+
+    fn reassign_sync_plan(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError> {
+        if self.is_busy() {
+            self.stop();
+        }
+        self.assigned_sync_plan_id = Some(*sync_plan_id);
+        Ok(())
+    }
+
+    fn current_state(&self) -> WorkerState {
+        return self.state;
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum SyncWorkerMessage {
-    StopReceiveData,
-    DataRecieverStopped,
-}
+
+
+// #[derive(Debug, Clone)]
+// pub enum StreamingData {
+//     Data(Value),
+//     StopCommandReceived,
+// }
+
+// #[derive(Debug, Clone, Copy)]
+// pub enum SyncWorkerMessage {
+//     StopReceiveData,
+//     DataRecieverStopped,
+// }
 
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub", get_mut = "pub")]
-pub struct WebsocketSyncWorker<MD, MW, ME> {
+pub struct WebsocketSyncWorker<TRS, TTR, SDS, ES> {
     id: Uuid,
     state: WorkerState,
+    // channel of requesting task from task manager
+    task_request_sender: Option<TRS>,
+    todo_task_receiver: Option<TTR>,
     // send data received from remote
-    data_sender: Option<MD>,
-    // send and receive commands from other modules, typically when to stop receiving data
-    worker_command_receiver: Option<MW>,
+    data_sender: Option<SDS>,
     // send error messages
-    error_sender: Option<ME>,
+    error_sender: Option<ES>,
+    assigned_sync_plan_id: Option<Uuid>
 }
 
 /// WebsocketSyncWorker is a long running work
-impl<MD, MW, ME> LongTaskHandlingWorker for WebsocketSyncWorker<MD, MW, ME>
+impl<TRS, TTR, SDS, ES>  LongTaskHandlingWorker for WebsocketSyncWorker<TRS, TTR, SDS, ES>
 where
-    MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ,
-    MW: MessageBusReceiver<SyncWorkerMessage>
-        + StaticClonableAsyncComponent
-        + BroadcastingMessageBusReceiver,
-    ME: MessageBusReceiver<SyncWorkerError> + StaticClonableMpscMQ,
+    TRS: TaskRequestMPMCSender,
+    TTR: SyncTaskMPMCReceiver,
+    SDS: StreamingDataMPMCSender,
+    ES: SyncWorkerErrorMPMCSender,
 {
 }
 
-impl<MD, MW, ME> WebsocketSyncWorker<MD, MW, ME>
+type WSConnection = tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>;
+
+impl<TRS, TTR, SDS, ES> WebsocketSyncWorker<TRS, TTR, SDS, ES>
 where
-    MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ,
-    MW: MessageBusReceiver<SyncWorkerMessage>
-        + StaticClonableAsyncComponent
-        + BroadcastingMessageBusReceiver,
-    ME: MessageBusSender<SyncWorkerError> + StaticClonableMpscMQ,
+    TRS: TaskRequestMPMCSender,
+    TTR: SyncTaskMPMCReceiver,
+    SDS: StreamingDataMPMCSender,
+    ES: SyncWorkerErrorMPMCSender,
 {
     pub fn new(
-        data_sender: MD,
-        worker_command_receiver: MW,
-        error_sender: ME,
-    ) -> WebsocketSyncWorker<MD, MW, ME> {
+        task_request_sender: TRS,
+        todo_task_receiver: TTR,
+        data_sender: SDS,
+        error_sender: ES
+    ) -> Self {
         return Self {
             id: Uuid::new_v4(),
-            state: WorkerState::Sleeping,
+            state: WorkerState::Idle,
+            task_request_sender: Some(task_request_sender),
+            todo_task_receiver: Some(todo_task_receiver),
             data_sender: Some(data_sender),
-            worker_command_receiver: Some(worker_command_receiver),
             error_sender: Some(error_sender),
+            assigned_sync_plan_id: None
         };
+    }
+
+    async fn request_task(&mut self) -> Result<SyncTask, SyncWorkerError> {
+        if !self.is_busy() {
+            return Err(SyncWorkerError::NoTaskAssigned);
+        }
+
+        let plan_id = self.assigned_sync_plan_id.expect("Why plan id is missing?");
+        let task_request = GetTaskRequest::new(plan_id);
+        let task_request_sender = self.inner_task_request_sender()?;
+        let req_result = task_request_sender.send(task_request).await;
+
+        match req_result {
+            Err(e) => {
+                match e {
+                    MessageBusError::SendFailed(_, _) => {
+                        error!("Worker {} failed to request a task!", self.id);
+                        return Err(SyncWorkerError::SendTaskRequestFailed(format!("Worker {} failed to request a task!", self.id)));
+                    },
+                    MessageBusError::SenderClosed => {
+                        error!("Worker {}'s request sender channel is closed unexpectedly!", self.id);
+                        return Err(SyncWorkerError::SendTaskRequestFailed(format!("Worker {}'s request sender channel is closed unexpectedly!", self.id)));
+                    },
+                    _ => {
+                        error!("Worker {} failed to request a task!", self.id);
+                        return Err(SyncWorkerError::SendTaskRequestFailed(format!("Worker {} failed to request a task!", self.id)));
+                    }
+                }
+            },
+            Ok(()) => {
+                let todo_task_receiver = self.inner_todo_task_receiver()?;
+
+                let todo_task_receive_result = todo_task_receiver.receive().await;
+                match todo_task_receive_result {
+                    None => {
+                        error!("No task received in worker {}", self.id);
+                        return Err(SyncWorkerError::NoTaskAssigned);
+                    },
+                    Some(task) => {
+                        info!("Worker {} received 1 task.", self.id);
+                        return Ok(task);
+                    }
+                }
+            }
+        }
+    }
+
+    fn start_working(&mut self, sync_plan_id: Uuid) {
+        self.state = WorkerState::Working;
+        self.assigned_sync_plan_id = Some(sync_plan_id);
+        info!("WebsocketSyncWorker {} starts working on plan {}... at {}", self.id, sync_plan_id, Local::now());
+    }
+
+    fn wait(&mut self) {
+        self.state = WorkerState::Idle;
+        info!("WebsocketSyncWorker {} starts waiting... at {}", self.id, Local::now());
+    }
+
+    fn stop(&mut self) {
+        self.state = WorkerState::Stopped;
+        self.assigned_sync_plan_id = None;
+        info!("WebsocketSyncWorker {} stops working... at {}", self.id, Local::now());
+    }
+
+    fn is_busy(&self) -> bool {
+        let busy_state = self.state == WorkerState::Working && self.assigned_sync_plan_id != None;
+        info!("Is worker {} busy? {}", self.id, busy_state);
+        return busy_state;
     }
 
     pub fn close_all_channels(&mut self) {
         info!("Closing data sender channel...");
         self.data_sender = None;
-        info!("Done! Closing worker_command_receiver channel...");
-        self.worker_command_receiver = None;
+        info!("Done! Closing todo_task_receiver channel...");
+        self.todo_task_receiver = None;
+        info!("Done! Closing task_request_sender channel...");
+        self.task_request_sender = None;
         info!("Done! Closing error_sender channel...");
         self.error_sender = None;
         self.state = WorkerState::Stopped;
         info!("All channel has closed.");
     }
 
-    pub fn inner_data_sender(&self) -> Result<&MD, SyncWorkerError> {
+    pub fn inner_data_sender(&self) -> Result<&SDS, SyncWorkerError> {
         if self.state == WorkerState::Stopped {
             return Err(SyncWorkerError::WorkerStopped);
         }
@@ -192,155 +531,201 @@ where
             None => Err(SyncWorkerError::WorkerStopped),
         }
     }
-
-    pub fn inner_command_receiver(&mut self) -> Result<&mut MW, SyncWorkerError> {
-        if self.state == WorkerState::Stopped {
-            return Err(SyncWorkerError::WorkerStopped);
-        }
-        match self.worker_command_receiver_mut() {
+    
+    pub fn inner_task_request_sender(&self) -> Result<&TRS, SyncWorkerError> {
+        match self.task_request_sender() {
             Some(_inner_sender) => Ok(_inner_sender),
             None => Err(SyncWorkerError::WorkerStopped),
         }
     }
 
-    pub fn inner_error_sender(&self) -> Result<&ME, SyncWorkerError> {
+    pub fn inner_todo_task_receiver(&mut self) -> Result<&mut TTR, SyncWorkerError> {
+        match self.todo_task_receiver_mut() {
+            Some(_inner_sender) => Ok(_inner_sender),
+            None => Err(SyncWorkerError::WorkerStopped),
+        }
+    }
+
+    pub fn inner_error_sender(&self) -> Result<&ES, SyncWorkerError> {
         match self.error_sender() {
             Some(_inner_sender) => Ok(_inner_sender),
             None => Err(SyncWorkerError::WorkerStopped),
         }
     }
-}
 
-#[async_trait]
-impl<MD, MW, ME> SyncWorker for WebsocketSyncWorker<MD, MW, ME>
-where
-    MD: MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ,
-    MW: MessageBusReceiver<SyncWorkerMessage>
-        + StaticClonableAsyncComponent
-        + BroadcastingMessageBusReceiver,
-    ME: MessageBusSender<SyncWorkerError> + StaticClonableMpscMQ,
-{
-    async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), SyncWorkerError> {
-        self.state = WorkerState::Working;
-        sync_task.start();
+    fn validate_task_spec(&mut self, sync_task: &SyncTask) -> Result<(), SyncWorkerError> {
         if *sync_task.spec().request_method() != RequestMethod::Websocket {
-            self.state = WorkerState::Sleeping;
+            self.wait();
             return Err(SyncWorkerError::BuildRequestFailed(String::from(
                 "Request method not supported!",
             )));
+        } else {
+            Ok(())
         }
-        let request_url = sync_task.spec().request_endpoint();
-        let connect_result = connect(request_url);
-        match connect_result {
+    }
+
+    async fn try_connect_ws_endpoint<'a>(&self, request_url: &Url) -> Result<WSConnection, SyncWorkerError> {
+        // let connect_result = tokio::spawn_blo
+        // connect(request_url);
+        let url = request_url.clone();
+        let join_result = tokio::task::spawn_blocking(move || {
+            let conn = connect(url);
+            return conn;
+        }).await;
+
+        match join_result {
+            Ok(conn_result) => {
+                match conn_result {
+                    Ok(conn) => {
+                        let (ws_connection, other) = conn;
+                        info!("Response from remote: {:?}", other);
+                        return Ok(ws_connection);
+                    },
+                    Err(e) => {
+                        return Err(SyncWorkerError::WebsocketConnectionFailed(e.to_string()));
+                    },
+                }
+            },
             Err(e) => {
-                println!("Connection failed!");
-                sync_task.failed();
-                // let err_channel = self.error_msg_channel.read().await;
-                let _ = self
-                    .inner_error_sender()?
-                    .send(SyncWorkerError::WebsocketConnectionFailed(e.to_string()))
-                    .await;
-                // drop(err_channel);
-                self.close_all_channels();
+                error!("Encountered JoinError in WebsocketWorker {}. Original Error: {:?}", self.id, e);
                 return Err(SyncWorkerError::WebsocketConnectionFailed(e.to_string()));
-            }
-            Ok((mut socket, _)) => {
-                let msg_body = sync_task.spec().payload();
-                if let Some(body) = msg_body {
-                    let text_msg = body.to_string();
-                    socket
-                        .write_message(Message::Text(text_msg))
-                        .expect("Failed to send message!");
-                    println!("Message sent!");
-                }
-
-                // When should receive end?
-                // Now we naively assume that worker should stop when no data is received.
-                // TODO: Support various types of closing strategy
-                // The rough idea is to have these async tasks working concurrently:
-                // 1. data receiving and sending task
-                // 2. worker message handling task
-                // 3. error message handling task
-                let mut running = true;
-                while running {
-                    let recv_command_result = self.inner_command_receiver()?.try_recv();
-                    match recv_command_result {
-                        Ok(command) => match command {
-                            SyncWorkerMessage::StopReceiveData => {
-                                running = false;
-                                sync_task.finished();
-                                info!("Sent stop receive command to receiver!");
-                                println!("Stopped receiving data.")
-                            }
-                            data_reciever_stopped => {
-                                println!(
-                                    "Why send me back this message? {:?}",
-                                    data_reciever_stopped
-                                );
-                            }
-                        },
-                        Err(e) => {
-                            info!("No command received. Message: {:#?}", e);
-                        }
-                    }
-
-                    let result = socket.read_message();
-                    match result {
-                        Ok(msg) => {
-                            // println!("Received msg from remote: {:?}", msg);
-                            if let Message::Text(s) = msg {
-                                // println!("Received text response: {}",s);
-                                // serde_json::
-                                let parse_result: Result<Value, serde_json::Error> =
-                                    serde_json::from_str(&s);
-                                match parse_result {
-                                    Ok(value) => {
-                                        let result = self
-                                            .inner_data_sender()?
-                                            .send(SyncWorkerData::Data(value))
-                                            .await;
-                                        match result {
-                                            Ok(()) => {
-                                                info!("Successfully send value!");
-                                            }
-                                            Err(e) => {
-                                                // TODO: if worker fail to send data, should it try again?
-                                                // If so, on what condition? Should it retry with a limit?
-                                                error!("error: {e}");
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to parse text to json value");
-                                        let r = self
-                                            .inner_error_sender()?
-                                            .try_send(SyncWorkerError::OtherError(e.to_string()));
-
-                                        if let Err(send_err) = r {
-                                            error!("Could not send error back! {:?}", send_err);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to read data from socket! error: {}", e);
-                            let _ = self
-                                .inner_error_sender()?
-                                .send(SyncWorkerError::NoDataReceived)
-                                .await;
-                        }
-                    }
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                }
-
-                println!("Worker finished... Closing channels...");
-                self.close_all_channels();
-                let _ = socket.close(None);
-                Ok(())
             }
         }
     }
+
+    async fn try_send_message(&self, connection: &mut WSConnection, message: String) {
+        let _ = tokio::task::block_in_place(|| {
+            connection
+                .write_message(Message::Text(message))
+                .expect("Failed to send message!");
+        });
+    }
+
+    async fn try_read_message(&self, connection: &mut WSConnection) -> Result<Message, SyncWorkerError> {
+        let result = tokio::task::block_in_place(|| {
+            let msg = connection
+                .read_message();
+            return msg;
+        });
+        match result {
+            Ok(msg) => { return Ok(msg); },
+            Err(e) => {
+                error!("{:?}",e);
+                return Err(SyncWorkerError::WSReadError(e.to_string()));
+            }
+        }
+    }
+
+    fn try_parse_message(&self, message: &str) -> Result<Value, SyncWorkerError> {
+        let parse_result: Result<Value, serde_json::Error> = serde_json::from_str(message);
+        match parse_result {
+            Ok(value) => {
+                return Ok(value);
+            }
+            Err(e) => {
+                error!("Failed to parse text to json value");
+                return Err(SyncWorkerError::JsonParseFailed(e.to_string()));
+            }
+        }
+    }
+
+    async fn try_send_data(&self, task_id: Uuid, data: Value) -> Result<(), SyncWorkerError> {
+        let data_sender = self.inner_data_sender()?;
+        if self.assigned_sync_plan_id.is_none() {
+            error!("While trying to send data, no sync plan is assigned to worker {}",self.id);
+            return Err(SyncWorkerError::NoTaskAssigned);
+        }
+
+        let plan_id = self.assigned_sync_plan_id().unwrap();
+        let stream_data = StreamingData::new(
+            plan_id, task_id, Some(data), Local::now());
+        let send_result = data_sender.send(stream_data).await;
+        
+        match send_result {
+            Ok(_) => {
+                return Ok(())
+            },
+            Err(e) => {
+                return Err(SyncWorkerError::WSStreamDataSendFailed(e.to_string()));
+            },
+        }
+    }
+}
+
+#[async_trait]
+impl<TRS, TTR, SDS, ES> SyncWorker for WebsocketSyncWorker<TRS, TTR, SDS, ES>
+where
+    TRS: TaskRequestMPMCSender,
+    TTR: SyncTaskMPMCReceiver,
+    SDS: StreamingDataMPMCSender,
+    ES: SyncWorkerErrorMPMCSender,
+{
+    
+    fn pause(&mut self) -> Result<(), SyncWorkerError> {
+        Ok(self.wait())
+    }
+
+    fn stop(&mut self) -> Result<(), SyncWorkerError> {
+        self.close_all_channels();
+        Ok(self.stop())
+    }
+
+    fn reassign_sync_plan(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError> {
+        if self.is_busy() {
+            self.stop();
+        }
+        self.assigned_sync_plan_id = Some(*sync_plan_id);
+        Ok(())
+    }
+
+    fn current_state(&self) -> WorkerState {
+        return self.state.clone();
+    }
+
+    async fn start_sync(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError> {
+        self.start_working(*sync_plan_id);
+
+        let mut sync_task = self.request_task().await?;
+        let request_url = sync_task.spec().request_endpoint();
+        let mut connection = self.try_connect_ws_endpoint(request_url).await?;
+        sync_task.start(Local::now());
+        let msg_body = sync_task.spec().payload();
+        if let Some(body) = msg_body {
+            let text_msg = body.to_string();
+            self.try_send_message(&mut connection, text_msg).await;
+        }
+
+        while self.is_busy() {
+            let read_result = self.try_read_message(&mut connection).await;
+            match read_result {
+                Ok(msg) => {
+                    match msg {
+                        Message::Text(s) => {
+                            let parse_result = self.try_parse_message(&s);
+                            match parse_result {
+                                Ok(data) => {
+                                    let _ = self.try_send_data(*sync_task.id(), data).await;
+                                }
+                                Err(e) => {
+                                    error!("Cannot parse value in websocket sync worker {}", self.id);
+                                }
+                            }
+                        },
+                        _ => {
+                            info!("Received other message: {}", msg);
+                        }
+                    }
+                },
+                Err(e) => {
+                    error!("{:?}",e);
+                }
+            }
+        }
+        Ok(())
+    }
+
+
+    
 }
 
 #[cfg(test)]
@@ -439,108 +824,109 @@ mod tests {
                     &datasource_name.unwrap(),
                     task_spec,
                     Uuid::new_v4(),
+                    None
                 )
             })
             .collect()
     }
 
-    #[tokio::test]
-    async fn websocket_worker_should_work() {
-        init_logger();
-        // let tokio_mpsc_creator = get_mq_factory::<SyncWorkerData>(SupportedMQImpl::InMemoryTokioChannel, MQType::Mpsc);
+    // #[tokio::test]
+    // async fn websocket_worker_should_work() {
+    //     init_logger();
+    //     // let tokio_mpsc_creator = get_mq_factory::<StreamingData>(SupportedMQImpl::InMemoryTokioChannel, MQType::Mpsc);
 
-        let (task_sender, mut task_receiver) = create_tokio_mpsc_channel::<SyncWorkerData>(1000);
+    //     let (task_sender, mut task_receiver) = create_tokio_mpsc_channel::<StreamingData>(1000);
 
-        let (mut worker_command_sender, worker_command_receiver) =
-            create_tokio_broadcasting_channel::<SyncWorkerMessage>(500);
-        let mut wc_receiver2 = worker_command_receiver.clone();
+    //     let (mut worker_command_sender, worker_command_receiver) =
+    //         create_tokio_broadcasting_channel::<SyncWorkerMessage>(500);
+    //     let mut wc_receiver2 = worker_command_receiver.clone();
 
-        let (error_sender, mut error_receiver) = create_tokio_mpsc_channel::<SyncWorkerError>(500);
-        // let error_receiver2 = error_receiver.clone();
-        let mut test_worker =
-            WebsocketSyncWorker::new(task_sender, worker_command_receiver, error_sender);
-        let mut test_task = SyncTask::default();
-        let spec =
-            TaskSpecification::new("ws://localhost:8000/ws", "websocket", HashMap::new(), None)
-                .expect("Unrecognized request method");
+    //     let (error_sender, mut error_receiver) = create_tokio_mpsc_channel::<SyncWorkerError>(500);
+    //     // let error_receiver2 = error_receiver.clone();
+    //     let mut test_worker =
+    //         WebsocketSyncWorker::new(task_sender, worker_command_receiver, error_sender);
+    //     let mut test_task = SyncTask::default();
+    //     let spec =
+    //         TaskSpecification::new("ws://localhost:8000/ws", "websocket", HashMap::new(), None)
+    //             .expect("Unrecognized request method");
 
-        let stop_time = chrono::Local::now() + chrono::Duration::seconds(10);
-        test_task.set_spec(spec);
-        println!("updated task: {:?}", test_task);
+    //     let stop_time = chrono::Local::now() + chrono::Duration::seconds(10);
+    //     test_task.set_spec(spec);
+    //     println!("updated task: {:?}", test_task);
 
-        let handle_task = tokio::spawn(async move {
-            let _ = test_worker.handle(&mut test_task).await;
-        });
+    //     let handle_task = tokio::spawn(async move {
+    //         let _ = test_worker.handle(&mut test_task).await;
+    //     });
 
-        let stop_receive_watcher_task = tokio::spawn(async move {
-            loop {
-                let now = chrono::Local::now();
-                // println!("The time is {:?}", now);
+    //     let stop_receive_watcher_task = tokio::spawn(async move {
+    //         loop {
+    //             let now = chrono::Local::now();
+    //             // println!("The time is {:?}", now);
 
-                if now >= stop_time {
-                    println!("Trying to stop worker");
-                    let result = worker_command_sender
-                        .send(SyncWorkerMessage::StopReceiveData)
-                        .await;
-                    match result {
-                        Ok(()) => {
-                            info!("Command sent. Stop.");
-                            worker_command_sender.close().await;
-                            break;
-                        }
-                        Err(e) => {
-                            println!("Error occurred while trying to send command: {:?}", e);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                        }
-                    }
-                }
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            }
-        });
+    //             if now >= stop_time {
+    //                 println!("Trying to stop worker");
+    //                 let result = worker_command_sender
+    //                     .send(SyncWorkerMessage::StopReceiveData)
+    //                     .await;
+    //                 match result {
+    //                     Ok(()) => {
+    //                         info!("Command sent. Stop.");
+    //                         worker_command_sender.close().await;
+    //                         break;
+    //                     }
+    //                     Err(e) => {
+    //                         println!("Error occurred while trying to send command: {:?}", e);
+    //                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    //                     }
+    //                 }
+    //             }
+    //             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    //         }
+    //     });
 
-        let receiver_task = tokio::spawn(async move {
-            loop {
-                let err = error_receiver.try_recv();
-                if let Ok(e) = err {
-                    println!("Worker failed! Error: {:#?}", e);
-                    println!("receiver_task exited.");
-                    break;
-                }
+    //     let receiver_task = tokio::spawn(async move {
+    //         loop {
+    //             let err = error_receiver.try_recv();
+    //             if let Ok(e) = err {
+    //                 println!("Worker failed! Error: {:#?}", e);
+    //                 println!("receiver_task exited.");
+    //                 break;
+    //             }
 
-                let worker_command = wc_receiver2.try_recv();
-                if let Ok(command) = worker_command {
-                    info!("Received {:#?}! Stopping receiver task.", command);
-                    wc_receiver2.close();
-                    // task_receiver.close();
-                    drop(task_receiver);
-                    break;
-                }
-                info!("Receiving data..");
-                let message = task_receiver.receive().await;
-                match message {
-                    Some(msg) => match msg {
-                        SyncWorkerData::Data(d) => {
-                            println!("Received: {:#?} in receiver_task", d);
-                        }
-                        SyncWorkerData::StopCommandReceived => {
-                            println!("Worker has stopped. Receiver exit.");
-                            break;
-                        }
-                    },
-                    None => {
-                        println!("No data received.");
-                        task_receiver.close();
-                        break;
-                    }
-                }
-                println!("receiver going to sleep for 100ms...");
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            }
-        });
+    //             let worker_command = wc_receiver2.try_recv();
+    //             if let Ok(command) = worker_command {
+    //                 info!("Received {:#?}! Stopping receiver task.", command);
+    //                 wc_receiver2.close();
+    //                 // task_receiver.close();
+    //                 drop(task_receiver);
+    //                 break;
+    //             }
+    //             info!("Receiving data..");
+    //             let message = task_receiver.receive().await;
+    //             match message {
+    //                 Some(msg) => match msg {
+    //                     StreamingData::Data(d) => {
+    //                         println!("Received: {:#?} in receiver_task", d);
+    //                     }
+    //                     StreamingData::StopCommandReceived => {
+    //                         println!("Worker has stopped. Receiver exit.");
+    //                         break;
+    //                     }
+    //                 },
+    //                 None => {
+    //                     println!("No data received.");
+    //                     task_receiver.close();
+    //                     break;
+    //                 }
+    //             }
+    //             println!("receiver going to sleep for 100ms...");
+    //             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    //         }
+    //     });
 
-        let _ = tokio::join!(handle_task, stop_receive_watcher_task, receiver_task);
-        println!("Websocket test done!");
-    }
+    //     let _ = tokio::join!(handle_task, stop_receive_watcher_task, receiver_task);
+    //     println!("Websocket test done!");
+    // }
 
     #[test]
     fn logging_should_work() {
@@ -593,7 +979,7 @@ mod tests {
     #[test]
     fn it_should_build_header_from_hashmap() {
         let hashmap: HashMap<String, String> = [
-            ("Cookie", "_gh_sess=73%2FX%2F0EoXU1Tj4slthgAt%2B%2BQIdQJekXSbcXBbFfDv0erH%2BHv0oPGtZ7hfDCNpHVtEpFs%2BJcMXgCjK%2BFUG%2BrKS6v6rOAZeZF%2B0bMyia%2BNhr5HmavEbo5y8NbKY0xtXw966S%2FY9ILmNDD%2FZYSUfLX0fIcr1z7Fj5VGeEOeqXLlKtDuH8Y6Cqc%2F1kMpZ3A0uJCTKnKHmi4VmWPDNvkuMDPRNqc6DodQdUOA7w5rEzsqSn2aHjf3C1znSmGss1BNyE1jRreBpGNkjP3PaCJnyNgByOuu%2BHYFhOm3kA%3D%3D--NTzXHWgMFd29sCbV--lLZIz%2FqJxMV%2FxR0JGQEYFg%3D%3D; path=/; secure; HttpOnly; SameSite=Lax"),
+            ("Cookie", "_gh_sess=73%2FX%2F0EoXU1Tj4slthgAt%2B%2BQIdQJekXSbcXBbFfDv0erH%2BHv0oPGtZ7hfDCNpHVtEpFs%2BJcMXgCjK%2BFUG%2BrKS6v6rOAZeZF%2B0bMyia%2BNhr5HmavEbo5y8NbKY0xtXw966S%2FY9ILmNDD%2FZYSUfLX0fIcr1z7Fj5VGeEOeqXLlKtDuH8Y6Cqc%2F1kMpZ3A0uJCTKnKHmi4VmWPDNvkuDSPRNqc6DodQdUOA7w5rEzsqSn2aHjf3C1znSmGss1BNyE1jRreBpGNkjP3PaCJnyNgByOuu%2BHYFhOm3kA%3D%3D--NTzXHWgMFd29sCbV--lLZIz%2FqJxMV%2FxR0JGQEYFg%3D%3D; path=/; secure; HttpOnly; SameSite=Lax"),
             ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")]
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -603,30 +989,30 @@ mod tests {
         println!("header map: {:?}", header_map);
     }
 
-    #[tokio::test]
-    async fn it_should_send_request() {
-        let client = reqwest::Client::new();
-        let mut test_worker = WebAPISyncWorker::new(client);
-        let payload = json!({
-            "api_name": "news",
-            "token": "a11e32e820d49141b0bcff711d6c4d66dda7e69d228ed0ac20d22750",
-            "params": {
-                "start_date":"","end_date":"","src":"","limit":"","offset":""
-            },
-            "fields": ["datetime", "content", "title"]
-        });
+    // #[tokio::test]
+    // async fn it_should_send_request() {
+    //     let client = reqwest::Client::new();
+    //     let mut test_worker = WebAPISyncWorker::new(client);
+    //     let payload = json!({
+    //         "api_name": "news",
+    //         "token": "a11e32e820d49141b0bcff711d6c4d66dda7e69d228ed0ac20d22750",
+    //         "params": {
+    //             "start_date":"","end_date":"","src":"","limit":"","offset":""
+    //         },
+    //         "fields": ["datetime", "content", "title"]
+    //     });
 
-        let spec = TaskSpecification::new(
-            "http://api.tushare.pro",
-            "post",
-            HashMap::new(),
-            Some(Arc::new(payload)),
-        )
-        .unwrap();
-        let mut test_task = SyncTask::default();
-        test_task.set_spec(spec);
-        let _ = test_worker.handle(&mut test_task).await;
+    //     let spec = TaskSpecification::new(
+    //         "http://api.tushare.pro",
+    //         "post",
+    //         HashMap::new(),
+    //         Some(Arc::new(payload)),
+    //     )
+    //     .unwrap();
+    //     let mut test_task = SyncTask::default();
+    //     test_task.set_spec(spec);
+    //     let _ = test_worker.handle(&mut test_task).await;
 
-        println!("updated task: {:?}", test_task);
-    }
+    //     println!("updated task: {:?}", test_task);
+    // }
 }

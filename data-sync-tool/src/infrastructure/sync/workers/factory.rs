@@ -1,14 +1,14 @@
 use crate::infrastructure::{
     mq::message_bus::StaticClonableAsyncComponent,
-    sync::workers::worker_traits::SyncWorkerDataMPSCSender,
+    sync::{workers::worker_traits::SyncTaskStreamingDataMPSCSender, factory::Builder, shared_traits::{SyncTaskMPMCReceiver, SyncTaskMPMCSender, TaskRequestMPMCSender, StreamingDataMPMCSender, SyncWorkerErrorMPMCSender}},
 };
-use std::{collections::HashMap, sync::Arc};
-
+use std::{collections::HashMap, sync::Arc, borrow::Borrow, str::FromStr};
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Client, RequestBuilder,
 };
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::{
     domain::synchronization::value_objects::task_spec::RequestMethod,
@@ -17,9 +17,9 @@ use crate::{
 
 use super::{
     errors::RequestMethodNotSupported,
-    worker::{WebAPISyncWorker, WebsocketSyncWorker},
+    worker::{WebAPISyncWorker, WebsocketSyncWorker, WorkerState},
     worker_traits::{
-        ShortRunningWorker, SyncWorkerErrorMessageMPSCSender, SyncWorkerMessageMPMCReceiver,
+        ShortRunningWorker, SyncWorkerErrorMessageMPSCSender
     },
 };
 
@@ -76,47 +76,185 @@ pub fn build_request(
     }
 }
 
-pub fn create_websocket_sync_workers<MD, MW, ME>(
+pub fn create_websocket_sync_workers<TRS, TTR, SDS, ES>(
     n: usize,
-    data_sender: MD,
-    worker_command_receiver: MW,
-    error_sender: ME,
-) -> Vec<WebsocketSyncWorker<MD, MW, ME>>
+    task_request_senders: Vec<TRS>,
+    todo_task_receivers: Vec<TTR>,
+    data_senders: Vec<SDS>,
+    error_senders: Vec<ES>
+) -> Vec<WebsocketSyncWorker<TRS, TTR, SDS, ES>>
 where
-    MD: SyncWorkerDataMPSCSender + StaticClonableMpscMQ,
-    MW: SyncWorkerMessageMPMCReceiver + StaticClonableAsyncComponent,
-    ME: SyncWorkerErrorMessageMPSCSender + StaticClonableMpscMQ,
+    TRS: TaskRequestMPMCSender,
+    TTR: SyncTaskMPMCReceiver,
+    SDS: StreamingDataMPMCSender,
+    ES: SyncWorkerErrorMPMCSender,
 {
     let mut workers = Vec::new();
-    for _ in 0..n {
-        let new_worker = WebsocketSyncWorker::new(
-            data_sender.clone(),
-            worker_command_receiver.clone(),
-            error_sender.clone(),
-        );
-        workers.push(new_worker);
-    }
+    (0..n)
+        .zip(task_request_senders.into_iter())
+        .zip(todo_task_receivers.into_iter())
+        .zip(data_senders.into_iter())
+        .zip(error_senders)
+        .for_each(|((((_, req_sender), task_receiver), task_sender), failed_task_sender)| {
+            let worker = WebsocketSyncWorker::new(
+                req_sender, 
+                task_receiver, 
+                task_sender,
+                failed_task_sender
+            );
+            workers.push(worker);
+        });
     workers
 }
 
-pub fn create_web_api_sync_workers(n: usize) -> Vec<WebAPISyncWorker> {
-    let mut workers = Vec::new();
+pub fn create_web_api_sync_workers<TRS: TaskRequestMPMCSender, TTR: SyncTaskMPMCReceiver, CTS: SyncTaskMPMCSender, FTS: SyncTaskMPMCSender>(
+    n: usize,
+    task_request_senders: Vec<TRS>, 
+    todo_task_receivers: Vec<TTR>,
+    completed_task_senders: Vec<CTS>,
+    failed_task_senders: Vec<FTS>
+) -> Vec<WebAPISyncWorker<TRS, TTR, CTS, FTS>> {
+    let mut workers = vec![];
+    let http_client = &Client::new();
 
-    for _ in 0..n {
-        let http_client = Client::new();
-        let new_worker = WebAPISyncWorker::new(http_client);
-        workers.push(new_worker);
-    }
+    (0..n)
+        .zip(task_request_senders.into_iter())
+        .zip(todo_task_receivers.into_iter())
+        .zip(completed_task_senders.into_iter())
+        .zip(failed_task_senders)
+        .for_each(|((((_, req_sender), task_receiver), task_sender), failed_task_sender)| {
+            let worker = WebAPISyncWorker::new(
+                http_client.clone(), 
+                req_sender, 
+                task_receiver, 
+                task_sender,
+                failed_task_sender
+            );
+            workers.push(worker);
+        });
     workers
 }
 
-pub fn create_short_running_workers(n: usize) -> Vec<Box<dyn ShortRunningWorker>> {
-    let mut workers: Vec<Box<dyn ShortRunningWorker>> = Vec::new();
+pub fn create_short_running_workers<TRS: TaskRequestMPMCSender, TTR: SyncTaskMPMCReceiver, CTS: SyncTaskMPMCSender, FTS: SyncTaskMPMCSender>(
+    n: usize, 
+    task_request_senders: Vec<TRS>, 
+    todo_task_receivers: Vec<TTR>,
+    completed_task_senders: Vec<CTS>,
+    failed_task_senders: Vec<FTS>
+) -> Vec<Box<dyn ShortRunningWorker>> {
+    let http_client = &Client::new();
+    let mut workers = vec![]; 
 
-    for _ in 0..n {
-        let http_client = Client::new();
-        let new_worker = WebAPISyncWorker::new(http_client);
-        workers.push(Box::new(new_worker));
-    }
+    (0..n)
+        .zip(task_request_senders.into_iter())
+        .zip(todo_task_receivers.into_iter())
+        .zip(completed_task_senders.into_iter())
+        .zip(failed_task_senders)
+        .for_each(|((((_, req_sender), task_receiver), task_sender), failed_task_sender)| {
+            let worker = WebAPISyncWorker::new(
+                http_client.clone(), 
+                req_sender, 
+                task_receiver, 
+                task_sender,
+                failed_task_sender
+            );
+            workers.push(Box::new(worker) as Box<dyn ShortRunningWorker>);
+        });
     workers
+
+}
+
+// Builders
+
+pub struct WebAPISyncWorkerBuilder<TRS: TaskRequestMPMCSender, TTR: SyncTaskMPMCReceiver, CTS: SyncTaskMPMCSender, FTS: SyncTaskMPMCSender> {
+    id: Option<Uuid>,
+    state: Option<WorkerState>,
+    http_client: Option<Client>,
+    task_request_sender: Option<TRS>,
+    todo_task_receiver: Option<TTR>,
+    completed_task_sender: Option<CTS>,
+    failed_task_sender: Option<FTS>,
+    assigned_sync_plan_id: Option<Uuid>
+}
+
+impl<TRS, TTR, CTS, FTS> WebAPISyncWorkerBuilder<TRS, TTR, CTS, FTS>
+where
+    TRS: TaskRequestMPMCSender,
+    TTR: SyncTaskMPMCReceiver,
+    CTS: SyncTaskMPMCSender,
+    FTS: SyncTaskMPMCSender
+{
+    pub fn new() -> Self {
+        WebAPISyncWorkerBuilder {
+            id: Some(Uuid::new_v4()),
+            state: Some(WorkerState::default()),
+            http_client: None,
+            task_request_sender: None,
+            todo_task_receiver: None,
+            completed_task_sender: None,
+            failed_task_sender: None,
+            assigned_sync_plan_id: None
+        }
+    }
+
+    pub fn state(mut self, state: WorkerState) -> Self {
+        self.state = Some(state);
+        self
+    }
+
+    pub fn http_client(mut self, client: Client) -> Self {
+        self.http_client = Some(client);
+        self
+    }
+
+    pub fn task_request_sender(mut self, sender: TRS) -> Self {
+        self.task_request_sender = Some(sender);
+        self
+    }
+    
+    pub fn todo_task_receiver(mut self, receiver: TTR) -> Self {
+        self.todo_task_receiver = Some(receiver);
+        self
+    }
+
+    pub fn completed_task_sender(mut self, sender: CTS) -> Self {
+        self.completed_task_sender = Some(sender);
+        self
+    }
+
+    pub fn assigned_sync_plan_id(mut self, sync_plan_id: Uuid) -> Self {
+        self.assigned_sync_plan_id = Some(sync_plan_id);
+        self
+    }
+
+    pub fn build(self) -> WebAPISyncWorker<TRS, TTR, CTS, FTS> {
+        WebAPISyncWorker {
+            id: self.id.expect("Id is missing"),
+            state: self.state.expect("State must be set"),
+            http_client: self.http_client.expect("HTTP Client must be set"),
+            task_request_sender: self.task_request_sender.expect("Task request sender must be set"),
+            todo_task_receiver: self.todo_task_receiver.expect("Todo task receiver is required!"),
+            completed_task_sender: self.completed_task_sender.expect("Completed task sender must be set"),
+            failed_task_sender: self.failed_task_sender.expect("Failed task sender must be set"),
+            assigned_sync_plan_id: self.assigned_sync_plan_id
+        }
+    }
+}
+
+impl<TRS, TTR, CTS, FTS> Builder for WebAPISyncWorkerBuilder<TRS, TTR, CTS, FTS>
+where
+    TRS: TaskRequestMPMCSender,
+    TTR: SyncTaskMPMCReceiver,
+    CTS: SyncTaskMPMCSender,
+    FTS: SyncTaskMPMCSender
+{
+    type Item = WebAPISyncWorker<TRS, TTR, CTS, FTS>;
+
+    fn new() -> Self {
+        WebAPISyncWorkerBuilder::new()
+    }
+
+    fn build(self) -> Self::Item {
+        self.build()
+    }
 }

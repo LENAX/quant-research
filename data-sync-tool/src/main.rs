@@ -1,13 +1,10 @@
-use chrono::Local;
-// use chrono::DateTime;
-// use chrono::Local;
 mod application;
 mod domain;
 mod infrastructure;
 // mod presentation;
 // mod services;
 
-use log::{error, info, trace, warn};
+// use log::{error, info, trace, warn};
 
 use env_logger;
 

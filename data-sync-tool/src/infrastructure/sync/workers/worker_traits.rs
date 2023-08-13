@@ -1,35 +1,40 @@
 use async_trait::async_trait;
+use uuid::Uuid;
 
-use crate::{
-    domain::synchronization::sync_task::SyncTask,
-    infrastructure::mq::{
+use crate::infrastructure::{mq::{
         message_bus::{
-            BroadcastingMessageBusReceiver, BroadcastingMessageBusSender, MessageBusReceiver,
-            MessageBusSender, MpscMessageBus, StaticAsyncComponent, StaticClonableAsyncComponent,
-            StaticClonableMpscMQ,
+            MessageBusReceiver,
+            MessageBusSender, MpscMessageBus, StaticAsyncComponent, StaticClonableMpscMQ,
         },
         tokio_channel_mq::{
-            TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
             TokioMpscMessageBusReceiver, TokioMpscMessageBusSender,
         },
-    },
-};
+    }, sync::shared_traits::StreamingData};
 
 use super::{
     errors::SyncWorkerError,
-    worker::{SyncWorkerData, SyncWorkerMessage},
+    worker::WorkerState,
 };
 
 /**
  * Synchronization worker traits
  */
 
+// TODO: Change workers to pull based model
+// Workers will actively request task managers for sync task instead of passively accepting sync task
+
 #[async_trait]
 pub trait SyncWorker: Send + Sync {
     // handles sync task, then updates its states and result
     // async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<&mut SyncTask, Box<dyn Error>>;
-    async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), SyncWorkerError>;
+    // async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), SyncWorkerError>;
+    async fn start_sync(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError>;
+    fn pause(&mut self) -> Result<(), SyncWorkerError>;
+    fn stop(&mut self) -> Result<(), SyncWorkerError>;
+    fn reassign_sync_plan(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError>;
+    fn current_state(&self) -> WorkerState;
 }
+
 
 /// A marker trait that marks a long running worker
 pub trait LongTaskHandlingWorker {}
@@ -39,27 +44,13 @@ pub trait ShortTaskHandlingWorker {}
 pub trait ShortRunningWorker: SyncWorker + ShortTaskHandlingWorker {}
 pub trait LongRunningWorker: SyncWorker + LongTaskHandlingWorker {}
 
-trait SyncWorkerMessageBroadcastingReceiver:
-    MessageBusReceiver<SyncWorkerMessage>
-    + StaticClonableAsyncComponent
-    + BroadcastingMessageBusReceiver
-    + Clone
-{
-}
-trait SyncWorkerMessageBroadcastingSender:
-    MessageBusSender<SyncWorkerMessage>
-    + StaticClonableAsyncComponent
-    + BroadcastingMessageBusSender<SyncWorkerMessage>
-    + Clone
-{
-}
 
-trait SyncWorkerDataMpscReceiver:
-    MessageBusReceiver<SyncWorkerData> + StaticClonableMpscMQ + Clone
+trait SyncTaskStreamingDataMpscReceiver:
+    MessageBusReceiver<StreamingData> + StaticClonableMpscMQ + Clone
 {
 }
-trait SyncWorkerDataMpscSender:
-    MessageBusSender<SyncWorkerData> + StaticClonableMpscMQ + Clone
+trait SyncTaskStreamingDataMpscSender:
+    MessageBusSender<StreamingData> + StaticClonableMpscMQ + Clone
 {
 }
 
@@ -72,31 +63,31 @@ trait SyncWorkerErrorMessageMpscSender:
 {
 }
 
-impl SyncWorkerDataMpscSender for TokioMpscMessageBusSender<SyncWorkerData> {}
+impl SyncTaskStreamingDataMpscSender for TokioMpscMessageBusSender<StreamingData> {}
 impl SyncWorkerErrorMessageMpscSender for TokioMpscMessageBusSender<SyncWorkerError> {}
 
 // Try to work around the object safety restriction
 // Traits extend from Clone is not object-safe
 // Use this trait in external modules and use clone_boxed method to clone the object
-pub trait SyncWorkerMessageMPMCReceiver:
-    MessageBusReceiver<SyncWorkerMessage> + BroadcastingMessageBusReceiver + StaticAsyncComponent
-{
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCReceiver>;
-}
-pub trait SyncWorkerMessageMPMCSender:
-    MessageBusSender<SyncWorkerMessage>
-    + BroadcastingMessageBusSender<SyncWorkerMessage>
-    + StaticAsyncComponent
-{
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCSender>;
-}
+// pub trait SyncWorkerMessageMPMCReceiver:
+//     MessageBusReceiver<SyncWorkerMessage> + BroadcastingMessageBusReceiver + StaticAsyncComponent
+// {
+//     fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCReceiver>;
+// }
+// pub trait SyncWorkerMessageMPMCSender:
+//     MessageBusSender<SyncWorkerMessage>
+//     + BroadcastingMessageBusSender<SyncWorkerMessage>
+//     + StaticAsyncComponent
+// {
+//     fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCSender>;
+// }
 
-pub trait SyncWorkerDataMPSCReceiver:
-    MessageBusReceiver<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent
+pub trait SyncTaskStreamingDataMPSCReceiver:
+    MessageBusReceiver<StreamingData> + MpscMessageBus + StaticAsyncComponent
 {
 }
-pub trait SyncWorkerDataMPSCSender:
-    MessageBusSender<SyncWorkerData> + MpscMessageBus + StaticAsyncComponent
+pub trait SyncTaskStreamingDataMPSCSender:
+    MessageBusSender<StreamingData> + MpscMessageBus + StaticAsyncComponent
 {
 }
 
@@ -111,18 +102,18 @@ pub trait SyncWorkerErrorMessageMPSCSender:
     fn clone_boxed(&self) -> Box<dyn SyncWorkerErrorMessageMPSCSender>;
 }
 
-impl SyncWorkerMessageBroadcastingReceiver
-    for TokioBroadcastingMessageBusReceiver<SyncWorkerMessage>
-{
-    // Implement the required methods
-}
+// impl SyncWorkerMessageBroadcastingReceiver
+//     for TokioBroadcastingMessageBusReceiver<SyncWorkerMessage>
+// {
+//     // Implement the required methods
+// }
 
-impl SyncWorkerDataMPSCSender for TokioMpscMessageBusSender<SyncWorkerData> {}
-impl SyncWorkerMessageMPMCReceiver for TokioBroadcastingMessageBusReceiver<SyncWorkerMessage> {
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCReceiver> {
-        Box::new(self.clone())
-    }
-}
+// impl SyncTaskStreamingDataMPSCSender for TokioMpscMessageBusSender<StreamingData> {}
+// impl SyncWorkerMessageMPMCReceiver for TokioBroadcastingMessageBusReceiver<SyncWorkerMessage> {
+//     fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCReceiver> {
+//         Box::new(self.clone())
+//     }
+// }
 
 impl SyncWorkerErrorMessageMPSCSender for TokioMpscMessageBusSender<SyncWorkerError> {
     fn clone_boxed(&self) -> Box<dyn SyncWorkerErrorMessageMPSCSender> {
@@ -131,11 +122,11 @@ impl SyncWorkerErrorMessageMPSCSender for TokioMpscMessageBusSender<SyncWorkerEr
     // implement the methods required by SyncWorkerErrorMessageMPSCSender here
 }
 
-impl SyncWorkerDataMPSCReceiver for TokioMpscMessageBusReceiver<SyncWorkerData> {}
-impl StaticAsyncComponent for TokioBroadcastingMessageBusSender<SyncWorkerMessage> {}
-impl SyncWorkerMessageMPMCSender for TokioBroadcastingMessageBusSender<SyncWorkerMessage> {
-    fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCSender> {
-        Box::new(self.clone())
-    }
-}
+impl SyncTaskStreamingDataMPSCReceiver for TokioMpscMessageBusReceiver<StreamingData> {}
+// impl StaticAsyncComponent for TokioBroadcastingMessageBusSender<SyncWorkerMessage> {}
+// impl SyncWorkerMessageMPMCSender for TokioBroadcastingMessageBusSender<SyncWorkerMessage> {
+//     fn clone_boxed(&self) -> Box<dyn SyncWorkerMessageMPMCSender> {
+//         Box::new(self.clone())
+//     }
+// }
 impl SyncWorkerErrorMessageMPSCReceiver for TokioMpscMessageBusReceiver<SyncWorkerError> {}

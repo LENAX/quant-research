@@ -19,6 +19,8 @@ use crate::infrastructure::mq::tokio_channel_mq::{
     TokioMpscMessageBusReceiver, TokioMpscMessageBusSender, TokioSpmcMessageBusReceiver,
     TokioSpmcMessageBusSender,
 };
+use crate::infrastructure::sync::GetTaskRequest;
+use crate::infrastructure::sync::shared_traits::{FailedTask, TaskRequestMPMCReceiver};
 use crate::{
     domain::synchronization::sync_task::SyncTask, infrastructure::mq::message_bus::MessageBusSender,
 };
@@ -43,64 +45,7 @@ impl SyncTaskMPSCSender for TokioMpscMessageBusSender<SyncTask> {
     }
 }
 
-pub trait SyncTaskMPSCReceiver:
-    MessageBusReceiver<SyncTask> + MpscMessageBus + StaticAsyncComponent
-{
-}
-impl SyncTaskMPSCReceiver for TokioMpscMessageBusReceiver<SyncTask> {}
 
-pub trait SyncTaskMPMCSender:
-    MessageBusSender<SyncTask> + StaticAsyncComponent + BroadcastingMessageBusSender<SyncTask>
-{
-}
-
-pub trait SyncTaskMPMCReceiver:
-    MessageBusReceiver<SyncTask> + StaticAsyncComponent + BroadcastingMessageBusReceiver
-{
-    fn clone_boxed(&self) -> Box<dyn SyncTaskMPMCReceiver>;
-}
-
-impl StaticAsyncComponent for TokioBroadcastingMessageBusSender<SyncTask> {}
-
-impl SyncTaskMPMCSender for TokioBroadcastingMessageBusSender<SyncTask> {}
-impl SyncTaskMPMCReceiver for TokioBroadcastingMessageBusReceiver<SyncTask> {
-    fn clone_boxed(&self) -> Box<dyn SyncTaskMPMCReceiver> {
-        Box::new(self.clone())
-    }
-}
-
-#[derive(Derivative, Getters, Setters, Default, Clone)]
-#[getset(get = "pub", set = "pub")]
-pub struct GetTaskRequest {
-    sync_plan_id: Uuid,
-}
-
-pub trait TaskRequestMPMCSender:
-    MessageBusSender<GetTaskRequest>
-    + StaticAsyncComponent
-    + BroadcastingMessageBusSender<GetTaskRequest>
-{
-    fn clone_boxed(&self) -> Box<dyn TaskRequestMPMCSender>;
-}
-
-pub trait TaskRequestMPMCReceiver:
-    MessageBusReceiver<GetTaskRequest> + StaticAsyncComponent + BroadcastingMessageBusReceiver
-{
-    fn clone_boxed(&self) -> Box<dyn TaskRequestMPMCReceiver>;
-}
-
-impl StaticAsyncComponent for TokioBroadcastingMessageBusSender<GetTaskRequest> {}
-
-impl TaskRequestMPMCSender for TokioBroadcastingMessageBusSender<GetTaskRequest> {
-    fn clone_boxed(&self) -> Box<dyn TaskRequestMPMCSender> {
-        Box::new(self.clone())
-    }
-}
-impl TaskRequestMPMCReceiver for TokioBroadcastingMessageBusReceiver<GetTaskRequest> {
-    fn clone_boxed(&self) -> Box<dyn TaskRequestMPMCReceiver> {
-        Box::new(self.clone())
-    }
-}
 
 trait TaskManagerErrorMpscSender: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ {}
 pub trait TaskManagerErrorMPSCSender:
@@ -130,7 +75,6 @@ pub trait TaskManagerErrorMPSCReceiver:
 
 impl TaskManagerErrorMPSCReceiver for TokioMpscMessageBusReceiver<TaskManagerError> {}
 
-pub type FailedTask = (Uuid, SyncTask);
 trait FailedTaskSpmcReceiver:
     MessageBusReceiver<FailedTask> + StaticClonableAsyncComponent + SpmcMessageBusReceiver
 {
@@ -143,25 +87,6 @@ trait FailedTaskSpmcSender:
 
 impl FailedTaskSpmcReceiver for TokioSpmcMessageBusReceiver<FailedTask> {}
 impl FailedTaskSpmcSender for TokioSpmcMessageBusSender<FailedTask> {}
-
-pub trait FailedTaskSPMCReceiver:
-    MessageBusReceiver<FailedTask> + StaticAsyncComponent + SpmcMessageBusReceiver
-{
-    fn clone_boxed(&self) -> Box<dyn FailedTaskSPMCReceiver>;
-}
-
-impl FailedTaskSPMCReceiver for TokioSpmcMessageBusReceiver<FailedTask> {
-    fn clone_boxed(&self) -> Box<dyn FailedTaskSPMCReceiver> {
-        Box::new(self.clone())
-    }
-}
-
-pub trait FailedTaskSPMCSender:
-    MessageBusSender<FailedTask> + StaticAsyncComponent + SpmcMessageBusSender<FailedTask>
-{
-}
-
-impl FailedTaskSPMCSender for TokioSpmcMessageBusSender<FailedTask> {}
 
 /// TaskManager
 #[derive(Derivative, Getters, Setters)]

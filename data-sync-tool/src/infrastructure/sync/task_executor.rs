@@ -30,22 +30,12 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use super::{
-    sync_rate_limiter::WebRequestRateLimiter,
-    task_manager::{
-        create_sync_task_manager, FailedTask, FailedTaskSPMCSender, GetTaskRequest,
-        SyncTaskMPMCReceiver, SyncTaskMPSCReceiver, TaskManager, TaskManagerError,
-        TaskManagerErrorMPSCReceiver, TaskRequestMPMCReceiver, TaskRequestMPMCSender,
-    },
-    worker::{
-        create_web_api_sync_workers, create_websocket_sync_workers, LongRunningWorker,
-        ShortTaskHandlingWorker, SyncWorker, SyncWorkerData, SyncWorkerDataMPSCReceiver,
-        SyncWorkerError, SyncWorkerErrorMessageMPSCReceiver, SyncWorkerMessage,
-        SyncWorkerMessageMPMCSender, WebAPISyncWorker, WebsocketSyncWorker,
-    },
+    sync_rate_limiter::WebRequestRateLimiter, workers::{worker::{StreamingData, SyncWorkerMessage, WebsocketSyncWorker, WebAPISyncWorker}, errors::SyncWorkerError, factory::{create_websocket_sync_workers, create_web_api_sync_workers}, worker_traits::{SyncTaskStreamingDataMPSCReceiver, SyncWorkerMessageMPMCSender, SyncWorkerErrorMessageMPSCReceiver}}, task_manager::{errors::TaskManagerError, tm_traits::{FailedTask, GetTaskRequest, SyncTaskMPMCReceiver, TaskRequestMPMCSender, FailedTaskSPMCSender, TaskManagerErrorMPSCReceiver}, task_manager::TaskManager, factory::create_sync_task_manager},
+    
 };
 
 type TokioExecutorChannels = (
-    TokioMpscMessageBusReceiver<SyncWorkerData>,
+    TokioMpscMessageBusReceiver<StreamingData>,
     TokioBroadcastingMessageBusSender<SyncWorkerMessage>,
     TokioMpscMessageBusReceiver<SyncWorkerError>,
     TokioMpscMessageBusReceiver<SyncTask>,
@@ -53,18 +43,18 @@ type TokioExecutorChannels = (
     TokioSpmcMessageBusSender<FailedTask>,
 );
 
-pub fn create_tokio_task_executor(
+pub fn create_tokio_task_executor<TRS, TTR, CTS, FTS>(
     n_workers: usize,
     channel_size: usize,
     create_tm_request: &CreateTaskManagerRequest,
 ) -> (
     SyncTaskExecutor<
         WebsocketSyncWorker<
-            TokioMpscMessageBusSender<SyncWorkerData>,
+            TokioMpscMessageBusSender<StreamingData>,
             TokioBroadcastingMessageBusReceiver<SyncWorkerMessage>,
             TokioMpscMessageBusSender<SyncWorkerError>,
         >,
-        WebAPISyncWorker,
+        WebAPISyncWorker<TRS, TTR, CTS, FTS>,
         TaskManager<
             WebRequestRateLimiter,
             TokioBroadcastingMessageBusSender<SyncTask>,
@@ -76,7 +66,8 @@ pub fn create_tokio_task_executor(
     TokioBroadcastingMessageBusSender<SyncWorkerMessage>,
 ) {
     // create message bus channels
-    let (task_sender, task_receiver) = create_tokio_broadcasting_channel::<SyncTask>(channel_size);
+    let (task_sender, task_receiver) = 
+        create_tokio_broadcasting_channel::<SyncTask>(channel_size);
     let (task_request_sender, task_request_receiver) =
         create_tokio_broadcasting_channel::<GetTaskRequest>(channel_size);
     let (error_sender, error_receiver) =
@@ -86,7 +77,7 @@ pub fn create_tokio_task_executor(
     let (sync_worker_message_sender, sync_worker_message_receiver) =
         create_tokio_broadcasting_channel::<SyncWorkerMessage>(channel_size);
     let (sync_worker_data_sender, sync_worker_data_receiver) =
-        create_tokio_mpsc_channel::<SyncWorkerData>(channel_size);
+        create_tokio_mpsc_channel::<StreamingData>(channel_size);
     let (sync_worker_error_sender, sync_worker_error_receiver) =
         create_tokio_mpsc_channel::<SyncWorkerError>(channel_size);
 
@@ -101,10 +92,12 @@ pub fn create_tokio_task_executor(
 
     // create task manager
     // FIXME: Derive receiver based on create task manager request
+    let n_queues = create_tm_request.create_task_queue_requests().len();
+    let task_request_receivers: Vec<_> = (0..n_queues).map(|_| { task_request_receiver.clone() }).collect();
     let task_manager = create_sync_task_manager(
         create_tm_request,
         task_sender,
-        task_request_receiver,
+        task_request_receivers,
         error_sender,
         failed_task_receiver,
     );
@@ -135,7 +128,7 @@ pub fn create_tokio_task_executor(
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
 struct WorkerChannels {
-    worker_data_receiver: Arc<RwLock<Box<dyn SyncWorkerDataMPSCReceiver>>>,
+    worker_data_receiver: Arc<RwLock<Box<dyn SyncTaskStreamingDataMPSCReceiver>>>,
     worker_message_sender: Arc<RwLock<Box<dyn SyncWorkerMessageMPMCSender>>>,
     worker_error_receiver: Arc<RwLock<Box<dyn SyncWorkerErrorMessageMPSCReceiver>>>,
 }

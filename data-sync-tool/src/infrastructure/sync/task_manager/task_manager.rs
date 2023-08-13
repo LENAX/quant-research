@@ -23,16 +23,13 @@ use crate::{
     domain::synchronization::{
         rate_limiter::RateLimiter, sync_plan::SyncPlan, sync_task::SyncTask,
     },
-    infrastructure::{mq::message_bus::MessageBusSender, sync::task_manager::errors::QueueError},
+    infrastructure::{mq::message_bus::MessageBusSender, sync::{task_manager::errors::QueueError, shared_traits::{SyncTaskMPMCSender, TaskRequestMPMCReceiver, FailedTaskSPMCReceiver}}},
 };
 
 use super::{
     errors::TaskManagerError,
     factory::{new_empty_limitless_queue, new_empty_queue},
-    tm_traits::{
-        FailedTaskSPMCReceiver, SyncTaskMPMCSender, SyncTaskManager, TaskManagerErrorMPSCSender,
-        TaskRequestMPMCReceiver, TaskSendingProgress,
-    },
+    tm_traits::{SyncTaskManager, TaskManagerErrorMPSCSender, TaskSendingProgress},
 };
 use crate::infrastructure::sync::task_manager::sync_task_queue::QueueId;
 use crate::infrastructure::sync::task_manager::sync_task_queue::SyncTaskQueue;
@@ -51,35 +48,35 @@ pub enum TaskManagerState {
 /// TaskManger is responsible for sending tasks for each sync plan upon receiving request.
 #[derive(Derivative, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
-pub struct TaskManager<T, MT, TR, ME, MF>
+pub struct TaskManager<T, MT, TR, ES, MF>
 where
     T: RateLimiter,
     MT: SyncTaskMPMCSender,
     TR: TaskRequestMPMCReceiver,
-    ME: TaskManagerErrorMPSCSender,
+    ES: TaskManagerErrorMPSCSender,
     MF: FailedTaskSPMCReceiver,
 {
     queues: Arc<RwLock<HashMap<QueueId, Arc<Mutex<SyncTaskQueue<T, TR>>>>>>,
     task_sender: MT,
-    error_message_channel: ME,
+    error_message_channel: ES,
     failed_task_channel: MF,
     current_state: TaskManagerState,
 }
 
-impl<T, MT, TR, ME, MF> TaskManager<T, MT, TR, ME, MF>
+impl<T, MT, TR, ES, MF> TaskManager<T, MT, TR, ES, MF>
 where
     T: RateLimiter,
     MT: SyncTaskMPMCSender,
     TR: TaskRequestMPMCReceiver,
-    ME: TaskManagerErrorMPSCSender,
+    ES: TaskManagerErrorMPSCSender,
     MF: FailedTaskSPMCReceiver,
 {
     pub fn new(
         task_queues: Vec<SyncTaskQueue<T, TR>>,
         task_sender: MT,
-        error_message_channel: ME,
+        error_message_channel: ES,
         failed_task_channel: MF,
-    ) -> TaskManager<T, MT, TR, ME, MF> {
+    ) -> TaskManager<T, MT, TR, ES, MF> {
         let mut q_map = HashMap::new();
         task_queues.into_iter().for_each(|q| {
             q_map.insert(*q.sync_plan_id(), Arc::new(Mutex::new(q)));
@@ -134,12 +131,12 @@ where
 }
 
 #[async_trait]
-impl<T, MT, TR, ME, MF> SyncTaskManager<T, TR> for TaskManager<T, MT, TR, ME, MF>
+impl<T, MT, TR, ES, MF> SyncTaskManager<T, TR> for TaskManager<T, MT, TR, ES, MF>
 where
     T: RateLimiter + 'static,
     MT: SyncTaskMPMCSender + Clone,
     TR: TaskRequestMPMCReceiver,
-    ME: TaskManagerErrorMPSCSender + Clone,
+    ES: TaskManagerErrorMPSCSender + Clone,
     MF: FailedTaskSPMCReceiver + Clone,
 {
     async fn add_tasks_to_plan(
@@ -519,10 +516,7 @@ mod tests {
                     TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
                 },
             },
-            sync::{
-                sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter},
-                task_manager::tm_traits::GetTaskRequest,
-            },
+            sync::{sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter}, GetTaskRequest},
         },
     };
     use log::{error, info};
@@ -601,6 +595,7 @@ mod tests {
                     &datasource_name.unwrap(),
                     task_spec,
                     Uuid::new_v4(),
+                    Some(10)
                 )
             })
             .collect()

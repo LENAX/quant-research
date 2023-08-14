@@ -50,51 +50,6 @@ use std::collections::HashMap;
  *    - progress report: summarize current progress and return it
  */
 
-// #[async_trait]
-// pub trait TaskExecutor {
-//     // add new sync plans to synchronize
-//     async fn assign(&mut self, sync_plans: Vec<SyncPlan>) -> Result<(), TaskExecutorError>;
-
-//     // run a single plan. Either start a new plan or continue a paused plan
-//     async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;
-
-//     // run all assigned plans
-//     async fn run_all(&mut self) -> Result<(), TaskExecutorError>;
-
-//     // temporarily pause a plan
-//     async fn pause(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;
-
-//     // pause all plans
-//     async fn pause_all(&mut self) -> Result<(), TaskExecutorError>;
-
-//     // cancel sync for plan, also removes it from the executor
-//     async fn cancel(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;
-
-//     // cancel and drop all plans
-//     async fn cancel_all(&mut self) -> Result<(), TaskExecutorError>;
-
-//     // report current progress
-//     async fn report_progress(&self) -> Result<SyncProgress, TaskExecutorError>;
-// }
-
-// Task Executor need to retain a copy of worker channels and task manager channels to
-// coordinate their work
-// #[derive(Derivative, Getters, Setters, MutGetters)]
-// #[getset(get = "pub", set = "pub")]
-// struct WorkerChannels {
-//     worker_data_receiver: Arc<RwLock<Box<dyn SyncTaskStreamingDataMPSCReceiver>>>,
-//     worker_message_sender: Arc<RwLock<Box<dyn SyncWorkerMessageMPMCSender>>>,
-//     worker_error_receiver: Arc<RwLock<Box<dyn SyncWorkerErrorMessageMPSCReceiver>>>,
-// }
-
-// #[derive(Derivative, Getters, Setters, MutGetters)]
-// #[getset(get = "pub", set = "pub")]
-// struct TaskManagerChannels {
-//     sync_task_receiver: Arc<RwLock<Box<dyn SyncTaskMPMCReceiver>>>,
-//     task_request_sender: Arc<RwLock<Box<dyn TaskRequestMPMCSender>>>,
-//     failed_task_sender: Arc<RwLock<Box<dyn FailedTaskSPMCSender>>>,
-//     manager_error_receiver: Arc<RwLock<Box<dyn TaskManagerErrorMPSCReceiver>>>,
-// }
 
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
@@ -107,14 +62,6 @@ pub struct SyncTaskExecutor<LW, SW, T, TR> {
     // worker_channels: WorkerChannels,
     // task_manager_channels: TaskManagerChannels,
 }
-
-// TODO:
-// 1. implement TaskExecutor trait
-// 2. may need channels to coordinate workers and task manager ✔
-// 3. How to populate tasks into task manager's queues and ensure all tasks of one dataset go to the same queue?
-// 4. Additional features like progress reporting.
-
-///
 
 impl<LW, SW, T, TR> SyncTaskExecutor<LW, SW, T, TR>
 where

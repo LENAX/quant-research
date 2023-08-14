@@ -1,14 +1,27 @@
-use chrono::{DateTime, offset::Local};
-use getset::{Getters, Setters, MutGetters};
+use chrono::{offset::Local, DateTime};
+use getset::{Getters, MutGetters, Setters};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{infrastructure::mq::{message_bus::{MessageBusSender, StaticAsyncComponent, BroadcastingMessageBusSender, MessageBusReceiver, BroadcastingMessageBusReceiver, SpmcMessageBusReceiver, SpmcMessageBusSender, MpscMessageBus}, tokio_channel_mq::{TokioBroadcastingMessageBusSender, TokioBroadcastingMessageBusReceiver, TokioSpmcMessageBusReceiver, TokioSpmcMessageBusSender, TokioMpscMessageBusReceiver}}, domain::synchronization::sync_task::SyncTask};
+use crate::{
+    domain::synchronization::sync_task::SyncTask,
+    infrastructure::mq::{
+        message_bus::{
+            BroadcastingMessageBusReceiver, BroadcastingMessageBusSender, MessageBusReceiver,
+            MessageBusSender, MpscMessageBus, SpmcMessageBusReceiver, SpmcMessageBusSender,
+            StaticAsyncComponent,
+        },
+        tokio_channel_mq::{
+            TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
+            TokioMpscMessageBusReceiver, TokioSpmcMessageBusReceiver, TokioSpmcMessageBusSender,
+        },
+    },
+};
 
-use super::{GetTaskRequest, workers::errors::SyncWorkerError};
+use super::{workers::errors::SyncWorkerError, GetTaskRequest};
 
 /// Some common traits used by components in the sync module
-/// 
+///
 
 pub trait SyncTaskMPSCReceiver:
     MessageBusReceiver<SyncTask> + MpscMessageBus + StaticAsyncComponent
@@ -68,12 +81,22 @@ pub struct StreamingData {
     sync_plan_id: Uuid,
     task_id: Uuid,
     data: Option<Value>,
-    received_time: DateTime<Local>
+    received_time: DateTime<Local>,
 }
 
 impl StreamingData {
-    pub fn new(plan_id: Uuid, task_id: Uuid, data: Option<Value>, received_time: DateTime<Local>) -> Self {
-        Self { sync_plan_id: plan_id, task_id: task_id, data: data, received_time: received_time }
+    pub fn new(
+        plan_id: Uuid,
+        task_id: Uuid,
+        data: Option<Value>,
+        received_time: DateTime<Local>,
+    ) -> Self {
+        Self {
+            sync_plan_id: plan_id,
+            task_id: task_id,
+            data: data,
+            received_time: received_time,
+        }
     }
 }
 
@@ -97,10 +120,10 @@ impl StreamingDataMPMCReceiver for TokioBroadcastingMessageBusReceiver<Streaming
     }
 }
 
-
-
 pub trait SyncWorkerErrorMPMCSender:
-    MessageBusSender<SyncWorkerError> + StaticAsyncComponent + BroadcastingMessageBusSender<SyncWorkerError>
+    MessageBusSender<SyncWorkerError>
+    + StaticAsyncComponent
+    + BroadcastingMessageBusSender<SyncWorkerError>
 {
 }
 
@@ -120,7 +143,7 @@ impl SyncWorkerErrorMPMCReceiver for TokioBroadcastingMessageBusReceiver<SyncWor
 }
 
 /// FailedTaskSPMCReceiver and FailedTaskSPMCReceiver
-/// Single Producer Multiple Receiver channel trait for sending back failed task to retry 
+/// Single Producer Multiple Receiver channel trait for sending back failed task to retry
 pub type FailedTask = (Uuid, SyncTask);
 pub trait FailedTaskSPMCReceiver:
     MessageBusReceiver<FailedTask> + StaticAsyncComponent + SpmcMessageBusReceiver

@@ -63,7 +63,7 @@ impl SyncTask {
         datasource_name: &str,
         task_spec: TaskSpecification,
         sync_plan_id: Uuid,
-        n_retry_left: Option<usize>
+        n_retry_left: Option<usize>,
     ) -> Self {
         let mut new_task = Self::default();
         new_task

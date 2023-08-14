@@ -1,10 +1,12 @@
 //! Specialized traits used by Task Manager
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use derivative::Derivative;
 use getset::{Getters, Setters};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::domain::synchronization::rate_limiter::RateLimiter;
@@ -19,8 +21,8 @@ use crate::infrastructure::mq::tokio_channel_mq::{
     TokioMpscMessageBusReceiver, TokioMpscMessageBusSender, TokioSpmcMessageBusReceiver,
     TokioSpmcMessageBusSender,
 };
-use crate::infrastructure::sync::GetTaskRequest;
 use crate::infrastructure::sync::shared_traits::{FailedTask, TaskRequestMPMCReceiver};
+use crate::infrastructure::sync::GetTaskRequest;
 use crate::{
     domain::synchronization::sync_task::SyncTask, infrastructure::mq::message_bus::MessageBusSender,
 };
@@ -44,8 +46,6 @@ impl SyncTaskMPSCSender for TokioMpscMessageBusSender<SyncTask> {
         Box::new(self.clone())
     }
 }
-
-
 
 trait TaskManagerErrorMpscSender: MessageBusSender<TaskManagerError> + StaticClonableMpscMQ {}
 pub trait TaskManagerErrorMPSCSender:
@@ -99,13 +99,23 @@ pub struct TaskSendingProgress {
 }
 
 impl TaskSendingProgress {
-    pub fn new(sync_plan_id: Uuid, task_sent: usize, total_tasks: usize, complete_rate: f32) -> Self {
-        Self { sync_plan_id, task_sent, total_tasks, complete_rate }
+    pub fn new(
+        sync_plan_id: Uuid,
+        task_sent: usize,
+        total_tasks: usize,
+        complete_rate: f32,
+    ) -> Self {
+        Self {
+            sync_plan_id,
+            task_sent,
+            total_tasks,
+            complete_rate,
+        }
     }
 }
 
 #[async_trait]
-pub trait SyncTaskManager<T: RateLimiter, TR: TaskRequestMPMCReceiver> {
+pub trait SyncTaskManager<T: RateLimiter, TR: TaskRequestMPMCReceiver>: Sync + Send {
     // start syncing all plans by sending tasks out to workers
     async fn listen_for_get_task_request(&mut self) -> Result<(), TaskManagerError>;
 
@@ -124,13 +134,14 @@ pub trait SyncTaskManager<T: RateLimiter, TR: TaskRequestMPMCReceiver> {
     // add new plans to sync
     async fn load_sync_plan(
         &mut self,
-        sync_plan: &SyncPlan,
+        sync_plan: Arc<Mutex<SyncPlan>>,
         rate_limiter: Option<T>,
         task_request_receiver: TR,
     ) -> Result<(), TaskManagerError>;
+
     async fn load_sync_plans(
         &mut self,
-        sync_plans: &[SyncPlan],
+        sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
         rate_limiters: Vec<Option<T>>,
         task_request_receivers: Vec<TR>,
     ) -> Result<(), TaskManagerError>;

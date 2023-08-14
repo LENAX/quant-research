@@ -36,5 +36,5 @@ pub enum SyncWorkerError {
     CompleteTaskSendFailed,
     ResendTaskFailed,
     WSReadError(String),
-    WSStreamDataSendFailed(String)
+    WSStreamDataSendFailed(String),
 }

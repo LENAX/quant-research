@@ -23,7 +23,10 @@ use crate::{
     domain::synchronization::{
         rate_limiter::RateLimiter, sync_plan::SyncPlan, sync_task::SyncTask,
     },
-    infrastructure::sync::{task_manager::errors::QueueError, shared_traits::{SyncTaskMPMCSender, TaskRequestMPMCReceiver, FailedTaskSPMCReceiver}},
+    infrastructure::sync::{
+        shared_traits::{FailedTaskSPMCReceiver, SyncTaskMPMCSender, TaskRequestMPMCReceiver},
+        task_manager::errors::QueueError,
+    },
 };
 
 use super::{
@@ -163,11 +166,12 @@ where
 
     async fn load_sync_plan(
         &mut self,
-        sync_plan: &SyncPlan,
+        sync_plan: Arc<Mutex<SyncPlan>>,
         rate_limiter: Option<T>,
         task_request_receiver: TR,
     ) -> Result<(), TaskManagerError> {
-        let sync_config = sync_plan.sync_config();
+        let plan_lock = sync_plan.lock().await;
+        let sync_config = plan_lock.sync_config();
 
         match rate_limiter {
             Some(rate_limiter) => {
@@ -197,7 +201,7 @@ where
 
     async fn load_sync_plans(
         &mut self,
-        sync_plans: &[SyncPlan],
+        sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
         rate_limiters: Vec<Option<T>>,
         task_request_receivers: Vec<TR>,
     ) -> Result<(), TaskManagerError> {
@@ -276,9 +280,8 @@ where
             let n_task_sent = *queue_lock.initial_size() - queue_lock.len();
             let complete_rate = (n_task_sent as f32) / (*queue_lock.initial_size() as f32);
             let total_tasks = *queue_lock.initial_size();
-            let progress = TaskSendingProgress::new(
-                sync_plan_id, n_task_sent, total_tasks, complete_rate
-            );
+            let progress =
+                TaskSendingProgress::new(sync_plan_id, n_task_sent, total_tasks, complete_rate);
             Ok(progress)
         } else {
             Err(TaskManagerError::QueueNotFound)
@@ -513,7 +516,11 @@ mod tests {
                 tokio_channel_mq::{
                     TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
                 },
-            }, sync::{task_manager::sync_rate_limiter::{WebRequestRateLimiter, new_web_request_limiter}, GetTaskRequest},
+            },
+            sync::{
+                task_manager::sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter},
+                GetTaskRequest,
+            },
             // sync::{sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter}, GetTaskRequest},
         },
     };
@@ -593,7 +600,7 @@ mod tests {
                     &datasource_name.unwrap(),
                     task_spec,
                     Uuid::new_v4(),
-                    Some(10)
+                    Some(10),
                 )
             })
             .collect()

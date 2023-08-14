@@ -1,20 +1,18 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::infrastructure::{mq::{
+use crate::infrastructure::{
+    mq::{
         message_bus::{
-            MessageBusReceiver,
-            MessageBusSender, MpscMessageBus, StaticAsyncComponent, StaticClonableMpscMQ,
+            MessageBusReceiver, MessageBusSender, MpscMessageBus, StaticAsyncComponent,
+            StaticClonableMpscMQ,
         },
-        tokio_channel_mq::{
-            TokioMpscMessageBusReceiver, TokioMpscMessageBusSender,
-        },
-    }, sync::shared_traits::StreamingData};
-
-use super::{
-    errors::SyncWorkerError,
-    worker::WorkerState,
+        tokio_channel_mq::{TokioMpscMessageBusReceiver, TokioMpscMessageBusSender},
+    },
+    sync::shared_traits::StreamingData,
 };
+
+use super::{errors::SyncWorkerError, worker::WorkerState};
 
 /**
  * Synchronization worker traits
@@ -35,7 +33,6 @@ pub trait SyncWorker: Send + Sync {
     fn current_state(&self) -> WorkerState;
 }
 
-
 /// A marker trait that marks a long running worker
 pub trait LongTaskHandlingWorker {}
 
@@ -43,7 +40,6 @@ pub trait LongTaskHandlingWorker {}
 pub trait ShortTaskHandlingWorker {}
 pub trait ShortRunningWorker: SyncWorker + ShortTaskHandlingWorker {}
 pub trait LongRunningWorker: SyncWorker + LongTaskHandlingWorker {}
-
 
 trait SyncTaskStreamingDataMpscReceiver:
     MessageBusReceiver<StreamingData> + StaticClonableMpscMQ + Clone

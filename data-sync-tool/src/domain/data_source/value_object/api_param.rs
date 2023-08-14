@@ -53,6 +53,4 @@ impl Default for APIParam {
 }
 
 #[cfg(test)]
-mod test {
-
-}
+mod test {}

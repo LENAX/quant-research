@@ -1,18 +1,16 @@
 use std::collections::VecDeque;
 
-use crate::infrastructure::sync::GetTaskRequest;
-use crate::infrastructure::sync::shared_traits::{SyncTaskMPMCSender, TaskRequestMPMCReceiver, FailedTaskSPMCReceiver};
+use crate::infrastructure::sync::shared_traits::{
+    FailedTaskSPMCReceiver, SyncTaskMPMCSender, TaskRequestMPMCReceiver,
+};
 use crate::infrastructure::sync::task_manager::sync_task_queue::QueueId;
 use crate::infrastructure::sync::task_manager::task_manager::TaskManagerState;
+use crate::infrastructure::sync::GetTaskRequest;
 use crate::{
     application::synchronization::dtos::task_manager::CreateTaskManagerRequest,
     domain::synchronization::{rate_limiter::RateLimiter, sync_task::SyncTask},
     infrastructure::{
-        mq::tokio_channel_mq::TokioBroadcastingMessageBusReceiver,
-        sync::{
-            factory::Builder,
-            // sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter},
-        },
+        mq::tokio_channel_mq::TokioBroadcastingMessageBusReceiver, sync::factory::Builder,
     },
 };
 use std::collections::HashMap;
@@ -21,7 +19,7 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use super::sync_rate_limiter::{WebRequestRateLimiter, new_web_request_limiter};
+use super::sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter};
 use super::{
     sync_task_queue::{QueueStatus, SyncTaskQueue},
     task_manager::TaskManager,
@@ -82,23 +80,22 @@ where
         .zip(task_request_receivers)
         .map(
             |(req, task_request_receiver)| match req.rate_limiter_param() {
-                Some(create_limiter_req) => {
-                    match req.rate_limiter_impl() {
-                        WebRequestRateLimiter => {
-                            let rate_limiter = new_web_request_limiter(
-                                *create_limiter_req.max_request(),
-                                *create_limiter_req.max_daily_request(),
-                                *create_limiter_req.cooldown(),
-                            );
-                            let queue = new_empty_queue(
-                                rate_limiter,
-                                task_request_receiver,
-                                *req.max_retry(),
-                                *req.sync_plan_id(),
-                            );
-                            return queue;
-                        }
-                }},
+                Some(create_limiter_req) => match req.rate_limiter_impl() {
+                    WebRequestRateLimiter => {
+                        let rate_limiter = new_web_request_limiter(
+                            *create_limiter_req.max_request(),
+                            *create_limiter_req.max_daily_request(),
+                            *create_limiter_req.cooldown(),
+                        );
+                        let queue = new_empty_queue(
+                            rate_limiter,
+                            task_request_receiver,
+                            *req.max_retry(),
+                            *req.sync_plan_id(),
+                        );
+                        return queue;
+                    }
+                },
                 None => {
                     let queue = new_empty_limitless_queue(
                         *req.max_retry(),

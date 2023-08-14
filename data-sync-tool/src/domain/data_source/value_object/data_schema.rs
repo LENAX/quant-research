@@ -72,6 +72,4 @@ impl Default for DataSchema {
 }
 
 #[cfg(test)]
-mod test {
-
-}
+mod test {}

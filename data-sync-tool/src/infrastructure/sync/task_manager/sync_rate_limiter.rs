@@ -19,7 +19,8 @@ use crate::{
     domain::synchronization::{
         custom_errors::TimerError,
         rate_limiter::{RateLimitStatus, RateLimiter},
-    }, infrastructure::sync::factory::Builder,
+    },
+    infrastructure::sync::factory::Builder,
 };
 use derivative::Derivative;
 use getset::{Getters, Setters};
@@ -388,7 +389,8 @@ mod test {
     use tokio::{join, sync::Mutex, task::JoinHandle};
 
     use crate::{
-        domain::synchronization::rate_limiter::{RateLimitStatus, RateLimiter}, infrastructure::sync::task_manager::sync_rate_limiter::WebRequestRateLimiter,
+        domain::synchronization::rate_limiter::{RateLimitStatus, RateLimiter},
+        infrastructure::sync::task_manager::sync_rate_limiter::WebRequestRateLimiter,
         // infrastructure::sync::sync_rate_limiter::WebRequestRateLimiter,
     };
 

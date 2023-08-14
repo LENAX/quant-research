@@ -1,10 +1,8 @@
 /**
  * Sync Task Executor Factory
- * 
+ *
  * Provides easy-to-use APIs to create SyncTaskExecutor
  */
-
-
 
 type TokioExecutorChannels = (
     TokioMpscMessageBusReceiver<StreamingData>,
@@ -38,8 +36,7 @@ pub fn create_tokio_task_executor<TRS, TTR, CTS, FTS>(
     TokioBroadcastingMessageBusSender<SyncWorkerMessage>,
 ) {
     // create message bus channels
-    let (task_sender, task_receiver) = 
-        create_tokio_broadcasting_channel::<SyncTask>(channel_size);
+    let (task_sender, task_receiver) = create_tokio_broadcasting_channel::<SyncTask>(channel_size);
     let (task_request_sender, task_request_receiver) =
         create_tokio_broadcasting_channel::<GetTaskRequest>(channel_size);
     let (error_sender, error_receiver) =
@@ -65,7 +62,9 @@ pub fn create_tokio_task_executor<TRS, TTR, CTS, FTS>(
     // create task manager
     // FIXME: Derive receiver based on create task manager request
     let n_queues = create_tm_request.create_task_queue_requests().len();
-    let task_request_receivers: Vec<_> = (0..n_queues).map(|_| { task_request_receiver.clone() }).collect();
+    let task_request_receivers: Vec<_> = (0..n_queues)
+        .map(|_| task_request_receiver.clone())
+        .collect();
     let task_manager = create_sync_task_manager(
         create_tm_request,
         task_sender,

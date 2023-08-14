@@ -1,35 +1,34 @@
 use async_trait::async_trait;
-use uuid::Uuid;
+use tokio::sync::Mutex;
 /// Task Executor Trait
 /// Defines the common interface for task execution
-use std::{error::Error, collections::HashMap};
+use std::{collections::HashMap, sync::Arc};
+use uuid::Uuid;
 
 use super::sync_plan::SyncPlan;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TaskExecutorError {
-     
-}
+pub enum TaskExecutorError {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PlanProgress {
     plan_id: Uuid,
     name: String,
     total_tasks: usize,
     completed_task: usize,
-    completion_rate: f32
+    completion_rate: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SyncProgress {
-    plan_progress: HashMap<Uuid, PlanProgress>
+    plan_progress: HashMap<Uuid, PlanProgress>,
 }
 
 #[async_trait]
-pub trait TaskExecutor {
+pub trait TaskExecutor: Sync + Send {
     // add new sync plans to synchronize
-    async fn assign(&mut self, sync_plans: Vec<SyncPlan>) -> Result<(), TaskExecutorError>;
-    
+    async fn assign(&mut self, sync_plans: Vec<Arc<Mutex<SyncPlan>>>) -> Result<(), TaskExecutorError>;
+
     // run a single plan. Either start a new plan or continue a paused plan
     async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;
 

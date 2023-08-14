@@ -348,7 +348,7 @@ where
                     error!("Failed to fetch task in worker {}! Reason: {:?}", self.id, e);
                 }
             }
-            sleep(Duration::from_millis(100)).await;
+            sleep(Duration::from_millis(500)).await;
         }
 
         // for compilation purpose
@@ -375,20 +375,6 @@ where
         return self.state;
     }
 }
-
-
-
-// #[derive(Debug, Clone)]
-// pub enum StreamingData {
-//     Data(Value),
-//     StopCommandReceived,
-// }
-
-// #[derive(Debug, Clone, Copy)]
-// pub enum SyncWorkerMessage {
-//     StopReceiveData,
-//     DataRecieverStopped,
-// }
 
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub", get_mut = "pub")]
@@ -720,12 +706,10 @@ where
                     error!("{:?}",e);
                 }
             }
+            sleep(Duration::from_secs(1)).await;
         }
         Ok(())
     }
-
-
-    
 }
 
 #[cfg(test)]

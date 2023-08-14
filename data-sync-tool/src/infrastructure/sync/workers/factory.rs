@@ -228,16 +228,12 @@ where
     }
 
     pub fn build(self) -> WebAPISyncWorker<TRS, TTR, CTS, FTS> {
-        WebAPISyncWorker {
-            id: self.id.expect("Id is missing"),
-            state: self.state.expect("State must be set"),
-            http_client: self.http_client.expect("HTTP Client must be set"),
-            task_request_sender: self.task_request_sender.expect("Task request sender must be set"),
-            todo_task_receiver: self.todo_task_receiver.expect("Todo task receiver is required!"),
-            completed_task_sender: self.completed_task_sender.expect("Completed task sender must be set"),
-            failed_task_sender: self.failed_task_sender.expect("Failed task sender must be set"),
-            assigned_sync_plan_id: self.assigned_sync_plan_id
-        }
+        WebAPISyncWorker::new(
+            self.http_client.expect("HTTP Client must be set"), 
+            self.task_request_sender.expect("Task request sender must be set"),
+            self.todo_task_receiver.expect("Todo task receiver is required!"), 
+            self.completed_task_sender.expect("Completed task sender must be set"),
+            self.failed_task_sender.expect("Failed task sender must be set"),)
     }
 }
 

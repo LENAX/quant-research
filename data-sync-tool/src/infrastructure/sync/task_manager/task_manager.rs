@@ -23,7 +23,7 @@ use crate::{
     domain::synchronization::{
         rate_limiter::RateLimiter, sync_plan::SyncPlan, sync_task::SyncTask,
     },
-    infrastructure::{mq::message_bus::MessageBusSender, sync::{task_manager::errors::QueueError, shared_traits::{SyncTaskMPMCSender, TaskRequestMPMCReceiver, FailedTaskSPMCReceiver}}},
+    infrastructure::sync::{task_manager::errors::QueueError, shared_traits::{SyncTaskMPMCSender, TaskRequestMPMCReceiver, FailedTaskSPMCReceiver}},
 };
 
 use super::{
@@ -276,12 +276,9 @@ where
             let n_task_sent = *queue_lock.initial_size() - queue_lock.len();
             let complete_rate = (n_task_sent as f32) / (*queue_lock.initial_size() as f32);
             let total_tasks = *queue_lock.initial_size();
-            let progress = TaskSendingProgress {
-                sync_plan_id,
-                task_sent: n_task_sent,
-                total_tasks,
-                complete_rate,
-            };
+            let progress = TaskSendingProgress::new(
+                sync_plan_id, n_task_sent, total_tasks, complete_rate
+            );
             Ok(progress)
         } else {
             Err(TaskManagerError::QueueNotFound)
@@ -472,7 +469,8 @@ where
                             let mut q_lock = q.lock().await;
                             if let Some(mut n_retry) = q_lock.retries_left() {
                                 if n_retry > 0 {
-                                    q_lock.push_back(failed_task);
+                                    // Ensure the order of fetched data
+                                    q_lock.push_front(failed_task);
                                     q_lock.set_retries_left(Some(n_retry - 1));
                                 }
                             }
@@ -515,8 +513,8 @@ mod tests {
                 tokio_channel_mq::{
                     TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
                 },
-            },
-            sync::{sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter}, GetTaskRequest},
+            }, sync::{task_manager::sync_rate_limiter::{WebRequestRateLimiter, new_web_request_limiter}, GetTaskRequest},
+            // sync::{sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter}, GetTaskRequest},
         },
     };
     use log::{error, info};

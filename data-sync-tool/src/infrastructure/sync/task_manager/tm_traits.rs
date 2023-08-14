@@ -98,6 +98,12 @@ pub struct TaskSendingProgress {
     complete_rate: f32,
 }
 
+impl TaskSendingProgress {
+    pub fn new(sync_plan_id: Uuid, task_sent: usize, total_tasks: usize, complete_rate: f32) -> Self {
+        Self { sync_plan_id, task_sent, total_tasks, complete_rate }
+    }
+}
+
 #[async_trait]
 pub trait SyncTaskManager<T: RateLimiter, TR: TaskRequestMPMCReceiver> {
     // start syncing all plans by sending tasks out to workers

@@ -1,10 +1,6 @@
 use derivative::Derivative;
 use getset::{Getters, Setters};
 
-use crate::{
-    application::synchronization::dtos::task_manager::CreateRateLimiterRequest,
-    infrastructure::sync::sync_rate_limiter::RateLimiterImpls,
-};
 
 #[derive(Derivative, Debug, Clone, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
@@ -16,6 +12,14 @@ pub struct RateQuota {
     max_concurrent_task: u32,
     use_impl: RateLimiterImpls,
     max_retry: u32,
+}
+
+#[derive(Derivative)]
+#[derivative(Default(bound = ""))]
+#[derive(Debug, Clone, Copy)]
+pub enum RateLimiterImpls {
+    #[derivative(Default)]
+    WebRequestRateLimiter,
 }
 
 #[derive(Derivative, Debug, Clone, Getters, Setters, Default)]

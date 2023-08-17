@@ -18,7 +18,7 @@ use crate::{
     application::synchronization::dtos::task_manager::CreateRateLimiterRequest,
     domain::synchronization::{
         custom_errors::TimerError,
-        rate_limiter::{RateLimitStatus, RateLimiter},
+        rate_limiter::{RateLimitStatus, RateLimiter}, value_objects::sync_config::RateLimiterImpls,
     },
     infrastructure::sync::factory::Builder,
 };
@@ -46,13 +46,7 @@ impl Error for InvalidLimitError {
 
 // Factory Methods
 // TODO: add an abstract factory method to provide an unified interface for all rate limiter factories
-#[derive(Derivative)]
-#[derivative(Default(bound = ""))]
-#[derive(Debug, Clone, Copy)]
-pub enum RateLimiterImpls {
-    #[derivative(Default)]
-    WebRequestRateLimiter,
-}
+
 
 pub fn new_web_request_limiter(
     max_request: u32,

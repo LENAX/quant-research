@@ -91,7 +91,7 @@ where
     // add new sync plans to synchronize
     async fn assign(&mut self, sync_plans: Vec<Arc<Mutex<SyncPlan>>>) -> Result<(), TaskExecutorError> {
         let task_manager_lock = self.task_manager.lock().await;
-        task_manager_lock.load_sync_plans(sync_plans, rate_limiters, task_request_receivers)
+        let _ = task_manager_lock.load_sync_plans(sync_plans, rate_limiters, task_request_receivers).await;
     }
 
     // run a single plan. Either start a new plan or continue a paused plan

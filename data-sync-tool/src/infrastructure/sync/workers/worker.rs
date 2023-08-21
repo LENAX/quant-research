@@ -2,6 +2,8 @@
 //! Handles synchronization task and sends web requests to remote data vendors
 //!
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use chrono::offset::Local;
 use derivative::Derivative;
@@ -9,7 +11,7 @@ use getset::{Getters, MutGetters, Setters};
 use log::{error, info};
 use reqwest::{Client, RequestBuilder};
 use serde_json::Value;
-use tokio::time::{sleep, Duration};
+use tokio::{time::{sleep, Duration}, sync::Mutex};
 use tungstenite::{connect, Message};
 use url::Url;
 use uuid::Uuid;
@@ -103,7 +105,7 @@ where
         WebAPISyncWorkerBuilder::new()
     }
 
-    async fn request_task(&mut self) -> Result<SyncTask, SyncWorkerError> {
+    async fn request_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, SyncWorkerError> {
         if !self.is_busy() {
             return Err(SyncWorkerError::NoTaskAssigned);
         }
@@ -180,10 +182,12 @@ where
 
     async fn execute_task<'a>(
         &'a self,
-        sync_task: &'a mut SyncTask,
-    ) -> Result<&mut SyncTask, SyncWorkerError> {
-        sync_task.start(Local::now());
-        let build_req_result = self.build_request_header(sync_task);
+        sync_task: &'a mut Arc<Mutex<SyncTask>>,
+    ) -> Result<&mut Arc<Mutex<SyncTask>>, SyncWorkerError> {
+        let mut task_lock = sync_task.lock().await;
+        task_lock.start(Local::now());
+        let build_req_result = self.build_request_header(&task_lock);
+        drop(task_lock);
 
         match build_req_result {
             Ok(request) => {
@@ -195,33 +199,41 @@ where
 
                         match parse_result {
                             Ok(json_value) => {
-                                sync_task
+                                let mut task_lock = sync_task.lock().await;
+                                task_lock
                                     .set_result(Some(json_value))
                                     .finished(Local::now());
+                                drop(task_lock);
                                 return Ok(sync_task);
                             }
                             Err(e) => {
-                                sync_task
+                                let mut task_lock = sync_task.lock().await;
+                                task_lock
                                     .set_result_message(Some(e.to_string()))
                                     .failed(Local::now());
+                                drop(task_lock);
                                 return Err(SyncWorkerError::JsonParseFailed(e.to_string()));
                             }
                         }
                     }
                     Err(e) => {
                         error!("error: {}", e);
-                        sync_task
+                        let mut task_lock = sync_task.lock().await;
+                        task_lock
                             .set_result_message(Some(e.to_string()))
                             .failed(Local::now());
+                        drop(task_lock);
                         return Err(SyncWorkerError::WebRequestFailed(e.to_string()));
                     }
                 }
             }
             Err(e) => {
                 error!("Failed to build request! Reason: {:?}", e);
-                sync_task
+                let mut task_lock = sync_task.lock().await;
+                task_lock
                     .set_result_message(Some(format!("Failed to build request! Reason: {:?}", e)))
                     .failed(Local::now());
+                drop(task_lock);
                 return Err(e);
             }
         }
@@ -229,19 +241,23 @@ where
 
     async fn send_completed_task(
         &self,
-        completed_task: SyncTask,
+        completed_task: Arc<Mutex<SyncTask>>,
         n_retry: Option<usize>,
     ) -> Result<(), SyncWorkerError> {
+        let task_lock = completed_task.lock().await;
+        let task_id = *task_lock.id();
+        drop(task_lock);
+
         for i in 0..n_retry.unwrap_or(5) {
             let send_result = self
                 .completed_task_sender
-                .send(completed_task.clone())
+                .send(Arc::clone(&completed_task))
                 .await;
             match send_result {
                 Ok(()) => {
                     info!(
-                        "Successfully sent finished task {} in worker {}!",
-                        completed_task.id(),
+                        "Successfully sent 1 finished task {} in worker {}!",
+                        task_id,
                         self.id
                     );
                     return Ok(());
@@ -249,23 +265,27 @@ where
                 Err(e) => {
                     error!(
                         "Failed to send finished task {} in worker {}! Reason: {:?}.",
-                        completed_task.id(),
+                        task_id,
                         self.id(),
                         e
                     );
                 }
             }
         }
-        error!("Task {} is discarded.", completed_task.id());
+
+        
+        error!("Task {} is discarded.", task_id);
         Err(SyncWorkerError::CompleteTaskSendFailed)
     }
 
     async fn send_failed_task(
         &self,
-        failed_task: SyncTask,
+        failed_task: Arc<Mutex<SyncTask>>,
         n_retry: Option<usize>,
     ) -> Result<(), SyncWorkerError> {
-        let task_id = *failed_task.id();
+        let task_lock = failed_task.lock().await;
+        let task_id = *task_lock.id();
+        drop(task_lock);
         for i in 0..n_retry.unwrap_or(5) {
             let send_result = self.failed_task_sender.send(failed_task.clone()).await;
             if let Ok(()) = send_result {
@@ -283,7 +303,7 @@ where
         Err(SyncWorkerError::ResendTaskFailed)
     }
 
-    async fn handle_send_failed_task(&self, task: SyncTask) -> Result<(), SyncWorkerError> {
+    async fn handle_send_failed_task(&self, task: Arc<Mutex<SyncTask>>) -> Result<(), SyncWorkerError> {
         if let Err(_) = self.send_failed_task(task, Some(5)).await {
             error!(
                 "Skipped task because worker {} cannot send it back",
@@ -359,7 +379,12 @@ where
             let task_request_result = self.request_task().await;
             match task_request_result {
                 Ok(mut task) => {
+                    let task_lock = task.lock().await;
+                    let task_id = *task_lock.id();
+                    drop(task_lock);
+
                     let result = self.execute_task(&mut task).await;
+
                     match result {
                         Ok(finished_task) => {
                             let send_result = self
@@ -392,7 +417,7 @@ where
                             SyncWorkerError::NoDataReceived => {
                                 error!(
                                     "No data received while executing task {} in worker {}.",
-                                    task.id(),
+                                    task_id,
                                     self.id
                                 );
                                 let _ = self.handle_send_failed_task(task).await;
@@ -400,7 +425,7 @@ where
                             SyncWorkerError::WebRequestFailed(reason) => {
                                 error!(
                                     "WebRequestFailed while executing task {} in worker {}.",
-                                    task.id(),
+                                    task_id,
                                     self.id
                                 );
                                 let _ = self.handle_send_failed_task(task).await;
@@ -504,7 +529,7 @@ where
         };
     }
 
-    async fn request_task(&mut self) -> Result<SyncTask, SyncWorkerError> {
+    async fn request_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, SyncWorkerError> {
         if !self.is_busy() {
             return Err(SyncWorkerError::NoTaskAssigned);
         }
@@ -639,8 +664,9 @@ where
         }
     }
 
-    fn validate_task_spec(&mut self, sync_task: &SyncTask) -> Result<(), SyncWorkerError> {
-        if *sync_task.spec().request_method() != RequestMethod::Websocket {
+    fn validate_task_spec(&mut self, sync_task: &Arc<Mutex<SyncTask>>) -> Result<(), SyncWorkerError> {
+        let task_lock = sync_task.blocking_lock();
+        if *task_lock.spec().request_method() != RequestMethod::Websocket {
             self.wait();
             return Err(SyncWorkerError::BuildRequestFailed(String::from(
                 "Request method not supported!",
@@ -877,7 +903,7 @@ mod tests {
             .collect()
     }
 
-    pub fn generate_random_sync_tasks(n: u32) -> Vec<SyncTask> {
+    pub fn generate_random_sync_tasks(n: u32) -> Vec<Arc<Mutex<SyncTask>>> {
         (0..n)
             .map(|_| {
                 let fake_url = format!("http://{}", SafeEmail().fake::<String>());
@@ -907,7 +933,7 @@ mod tests {
                 let create_time = Local::now();
                 let dataset_name = Some(random_string(10));
                 let datasource_name = Some(random_string(10));
-                SyncTask::new(
+                Arc::new(Mutex::new(SyncTask::new(
                     Uuid::new_v4(),
                     &dataset_name.unwrap(),
                     Uuid::new_v4(),
@@ -915,7 +941,7 @@ mod tests {
                     task_spec,
                     Uuid::new_v4(),
                     None,
-                )
+                )))
             })
             .collect()
     }
@@ -935,7 +961,7 @@ mod tests {
     //     // let error_receiver2 = error_receiver.clone();
     //     let mut test_worker =
     //         WebsocketSyncWorker::new(task_sender, worker_command_receiver, error_sender);
-    //     let mut test_task = SyncTask::default();
+    //     let mut test_task = Arc<Mutex<SyncTask>>::default();
     //     let spec =
     //         TaskSpecification::new("ws://localhost:8000/ws", "websocket", HashMap::new(), None)
     //             .expect("Unrecognized request method");
@@ -1099,7 +1125,7 @@ mod tests {
     //         Some(Arc::new(payload)),
     //     )
     //     .unwrap();
-    //     let mut test_task = SyncTask::default();
+    //     let mut test_task = Arc<Mutex<SyncTask>>::default();
     //     test_task.set_spec(spec);
     //     let _ = test_worker.handle(&mut test_task).await;
 

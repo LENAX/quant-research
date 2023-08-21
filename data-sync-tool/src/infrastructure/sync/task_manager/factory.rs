@@ -117,7 +117,7 @@ where
 /// 2. TaskManagerBuilder
 pub struct SyncTaskQueueBuilder<T: RateLimiter, TR: TaskRequestMPMCReceiver> {
     sync_plan_id: Option<Uuid>,
-    tasks: Option<VecDeque<SyncTask>>,
+    tasks: Option<VecDeque<Arc<Mutex<SyncTask>>>>,
     task_request_receiver: Option<TR>,
     rate_limiter: Option<T>,
     max_retry: Option<u32>,
@@ -132,7 +132,7 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueueBuilder<T, TR> {
         self
     }
 
-    pub fn tasks(mut self, tasks: VecDeque<SyncTask>) -> Self {
+    pub fn tasks(mut self, tasks: VecDeque<Arc<Mutex<SyncTask>>>) -> Self {
         self.tasks = Some(tasks);
         self
     }

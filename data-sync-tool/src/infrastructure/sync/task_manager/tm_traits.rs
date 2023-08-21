@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::domain::synchronization::rate_limiter::RateLimiter;
 use crate::domain::synchronization::sync_plan::SyncPlan;
+use crate::domain::synchronization::value_objects::sync_config::RateLimiterImpls;
 use crate::infrastructure::mq::message_bus::{
     BroadcastingMessageBusReceiver, BroadcastingMessageBusSender, MessageBusReceiver,
     MpscMessageBus, SpmcMessageBusReceiver, SpmcMessageBusSender, StaticAsyncComponent,
@@ -29,19 +30,19 @@ use crate::{
 
 use super::errors::TaskManagerError;
 
-trait SyncTaskMpscSender: MessageBusSender<SyncTask> + StaticClonableMpscMQ {}
-trait SyncTaskMpscReceiver: MessageBusReceiver<SyncTask> + StaticMpscMQReceiver {}
+trait SyncTaskMpscSender: MessageBusSender<Arc<Mutex<SyncTask>>> + StaticClonableMpscMQ {}
+trait SyncTaskMpscReceiver: MessageBusReceiver<Arc<Mutex<SyncTask>>> + StaticMpscMQReceiver {}
 
-impl SyncTaskMpscSender for TokioMpscMessageBusSender<SyncTask> {}
-impl SyncTaskMpscReceiver for TokioMpscMessageBusReceiver<SyncTask> {}
+impl SyncTaskMpscSender for TokioMpscMessageBusSender<Arc<Mutex<SyncTask>>> {}
+impl SyncTaskMpscReceiver for TokioMpscMessageBusReceiver<Arc<Mutex<SyncTask>>> {}
 
 pub trait SyncTaskMPSCSender:
-    MessageBusSender<SyncTask> + MpscMessageBus + StaticAsyncComponent
+    MessageBusSender<Arc<Mutex<SyncTask>>> + MpscMessageBus + StaticAsyncComponent
 {
     fn clone_boxed(&self) -> Box<dyn SyncTaskMPSCSender>;
 }
 
-impl SyncTaskMPSCSender for TokioMpscMessageBusSender<SyncTask> {
+impl SyncTaskMPSCSender for TokioMpscMessageBusSender<Arc<Mutex<SyncTask>>> {
     fn clone_boxed(&self) -> Box<dyn SyncTaskMPSCSender> {
         Box::new(self.clone())
     }
@@ -122,13 +123,13 @@ pub trait SyncTaskManager<T: RateLimiter, TR: TaskRequestMPMCReceiver>: Sync + S
     // stop syncing all plans
     async fn stop_sending_all_tasks(
         &mut self,
-    ) -> Result<HashMap<Uuid, Vec<SyncTask>>, TaskManagerError>;
+    ) -> Result<HashMap<Uuid, Vec<Arc<Mutex<SyncTask>>>>, TaskManagerError>;
 
     // When need add new tasks ad hoc, use this method
     async fn add_tasks_to_plan(
         &mut self,
         plan_id: Uuid,
-        tasks: Vec<SyncTask>,
+        tasks: Vec<Arc<Mutex<SyncTask>>>,
     ) -> Result<(), TaskManagerError>;
 
     // add new plans to sync
@@ -139,11 +140,25 @@ pub trait SyncTaskManager<T: RateLimiter, TR: TaskRequestMPMCReceiver>: Sync + S
         task_request_receiver: TR,
     ) -> Result<(), TaskManagerError>;
 
+    async fn load_sync_plan_with_limiter(
+        &mut self,
+        sync_plan: Arc<Mutex<SyncPlan>>,
+        rate_limiter_type: RateLimiterImpls,
+        task_request_receiver: TR,
+    ) -> Result<(), TaskManagerError>;
+
     async fn load_sync_plans(
         &mut self,
         sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
         rate_limiters: Vec<Option<T>>,
         task_request_receivers: Vec<TR>,
+    ) -> Result<(), TaskManagerError>;
+
+    async fn load_sync_plans_with_rate_limiter(
+        &mut self,
+        sync_plan: Vec<Arc<Mutex<SyncPlan>>>,
+        rate_limiter_type: RateLimiterImpls,
+        task_request_receiver: Vec<TR>,
     ) -> Result<(), TaskManagerError>;
 
     // stop syncing given the id, but it is resumable
@@ -153,7 +168,7 @@ pub trait SyncTaskManager<T: RateLimiter, TR: TaskRequestMPMCReceiver>: Sync + S
     async fn stop_and_remove_sync_plan(
         &mut self,
         sync_plan_id: Uuid,
-    ) -> Result<Vec<SyncTask>, TaskManagerError>;
+    ) -> Result<Vec<Arc<Mutex<SyncTask>>>, TaskManagerError>;
 
     // pause sending tasks
     // typically used when rate limiting does not help

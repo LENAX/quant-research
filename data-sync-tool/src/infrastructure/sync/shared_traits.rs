@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use chrono::{offset::Local, DateTime};
 use getset::{Getters, MutGetters, Setters};
 use serde_json::Value;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::{
@@ -24,10 +27,10 @@ use super::{workers::errors::SyncWorkerError, GetTaskRequest};
 ///
 
 pub trait SyncTaskMPSCReceiver:
-    MessageBusReceiver<SyncTask> + MpscMessageBus + StaticAsyncComponent
+    MessageBusReceiver<Arc<Mutex<SyncTask>>> + MpscMessageBus + StaticAsyncComponent
 {
 }
-impl SyncTaskMPSCReceiver for TokioMpscMessageBusReceiver<SyncTask> {}
+impl SyncTaskMPSCReceiver for TokioMpscMessageBusReceiver<Arc<Mutex<SyncTask>>> {}
 
 pub trait TaskRequestMPMCSender:
     MessageBusSender<GetTaskRequest>
@@ -57,20 +60,20 @@ impl TaskRequestMPMCReceiver for TokioBroadcastingMessageBusReceiver<GetTaskRequ
 }
 
 pub trait SyncTaskMPMCSender:
-    MessageBusSender<SyncTask> + StaticAsyncComponent + BroadcastingMessageBusSender<SyncTask>
+    MessageBusSender<Arc<Mutex<SyncTask>>> + StaticAsyncComponent + BroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>
 {
 }
 
 pub trait SyncTaskMPMCReceiver:
-    MessageBusReceiver<SyncTask> + StaticAsyncComponent + BroadcastingMessageBusReceiver
+    MessageBusReceiver<Arc<Mutex<SyncTask>>> + StaticAsyncComponent + BroadcastingMessageBusReceiver
 {
     fn clone_boxed(&self) -> Box<dyn SyncTaskMPMCReceiver>;
 }
 
-impl StaticAsyncComponent for TokioBroadcastingMessageBusSender<SyncTask> {}
+impl StaticAsyncComponent for TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>> {}
 
-impl SyncTaskMPMCSender for TokioBroadcastingMessageBusSender<SyncTask> {}
-impl SyncTaskMPMCReceiver for TokioBroadcastingMessageBusReceiver<SyncTask> {
+impl SyncTaskMPMCSender for TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>> {}
+impl SyncTaskMPMCReceiver for TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>> {
     fn clone_boxed(&self) -> Box<dyn SyncTaskMPMCReceiver> {
         Box::new(self.clone())
     }
@@ -144,7 +147,7 @@ impl SyncWorkerErrorMPMCReceiver for TokioBroadcastingMessageBusReceiver<SyncWor
 
 /// FailedTaskSPMCReceiver and FailedTaskSPMCReceiver
 /// Single Producer Multiple Receiver channel trait for sending back failed task to retry
-pub type FailedTask = (Uuid, SyncTask);
+pub type FailedTask = (Uuid, Arc<Mutex<SyncTask>>);
 pub trait FailedTaskSPMCReceiver:
     MessageBusReceiver<FailedTask> + StaticAsyncComponent + SpmcMessageBusReceiver
 {

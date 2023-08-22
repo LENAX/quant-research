@@ -48,27 +48,7 @@ impl Error for InvalidLimitError {
 // TODO: add an abstract factory method to provide an unified interface for all rate limiter factories
 
 
-pub fn new_web_request_limiter(
-    max_request: u32,
-    max_daily_request: Option<u32>,
-    cooldown: Option<u32>,
-) -> WebRequestRateLimiter {
-    return WebRequestRateLimiter::new(max_request, max_daily_request, cooldown).unwrap();
-}
 
-pub fn create_rate_limiter(
-    create_limiter_req: &CreateRateLimiterRequest,
-    limiter_type: RateLimiterImpls,
-) -> Box<dyn RateLimiter> {
-    match limiter_type {
-        RateLimiterImpls::WebRequestRateLimiter => Box::new(new_web_request_limiter(
-            *create_limiter_req.max_request(),
-            *create_limiter_req.max_daily_request(),
-            *create_limiter_req.cooldown(),
-        )),
-        // handle other LimiterTypes here
-    }
-}
 
 /// WebRequestRateLimiter Builder
 pub struct WebRequestRateLimiterBuilder {

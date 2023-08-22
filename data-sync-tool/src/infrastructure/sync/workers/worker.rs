@@ -806,10 +806,13 @@ where
         self.start_working(*sync_plan_id);
 
         let mut sync_task = self.request_task().await?;
-        let request_url = sync_task.spec().request_endpoint();
+        let task_lock = sync_task.lock().await;
+        let request_url = task_lock.spec().request_endpoint();
+        let task_id = *task_lock.id();
         let mut connection = self.try_connect_ws_endpoint(request_url).await?;
-        sync_task.start(Local::now());
-        let msg_body = sync_task.spec().payload();
+        task_lock.start(Local::now());
+        drop(task_lock);
+        let msg_body = task_lock.spec().payload();
         if let Some(body) = msg_body {
             let text_msg = body.to_string();
             self.try_send_message(&mut connection, text_msg).await;
@@ -823,7 +826,7 @@ where
                         let parse_result = self.try_parse_message(&s);
                         match parse_result {
                             Ok(data) => {
-                                let _ = self.try_send_data(*sync_task.id(), data).await;
+                                let _ = self.try_send_data(task_id, data).await;
                             }
                             Err(e) => {
                                 error!("Cannot parse value in websocket sync worker {}", self.id);

@@ -31,7 +31,7 @@ use crate::{
 
 use super::{
     errors::TaskManagerError,
-    factory::{new_empty_limitless_queue, new_empty_queue},
+    factory::{new_empty_limitless_queue, new_empty_queue, create_rate_limiter_by_rate_quota, RateLimiterInstance},
     tm_traits::{SyncTaskManager, TaskManagerErrorMPSCSender, TaskSendingProgress},
 };
 use crate::infrastructure::sync::task_manager::sync_task_queue::QueueId;
@@ -134,7 +134,7 @@ where
 }
 
 #[async_trait]
-impl<T, MT, TR, ES, MF> SyncTaskManager<T, TR> for TaskManager<T, MT, TR, ES, MF>
+impl<T, MT, TR, ES, MF> SyncTaskManager for TaskManager<T, MT, TR, ES, MF>
 where
     T: RateLimiter + 'static,
     MT: SyncTaskMPMCSender + Clone,
@@ -142,6 +142,9 @@ where
     ES: TaskManagerErrorMPSCSender + Clone,
     MF: FailedTaskSPMCReceiver + Clone,
 {
+    type TaskReceiverType = TR;
+    type RateLimiterType = T;
+
     async fn add_tasks_to_plan(
         &mut self,
         plan_id: Uuid,
@@ -167,8 +170,8 @@ where
     async fn load_sync_plan(
         &mut self,
         sync_plan: Arc<Mutex<SyncPlan>>,
-        rate_limiter: Option<T>,
-        task_request_receiver: TR,
+        rate_limiter: Option<Self::RateLimiterType>,
+        task_request_receiver: Self::TaskReceiverType,
     ) -> Result<(), TaskManagerError> {
         let plan_lock = sync_plan.lock().await;
         let sync_config = plan_lock.sync_config();
@@ -204,17 +207,35 @@ where
     async fn load_sync_plan_with_limiter(
         &mut self,
         sync_plan: Arc<Mutex<SyncPlan>>,
-        rate_limiter_type: RateLimiterImpls,
         task_request_receiver: TR,
     ) -> Result<(), TaskManagerError> {
-        todo!();
+        let plan_lock = sync_plan.lock().await;
+        let rate_quota = plan_lock.sync_config().sync_rate_quota();
+        drop(plan_lock);
+
+        match rate_quota {
+            Some(quota) =>  {
+                // let rate_limiter_impl = quote.use_impl;
+                let rate_limiter_instance = create_rate_limiter_by_rate_quota(quota);
+                match rate_limiter_instance {
+                    RateLimiterInstance::WebLimiter(limiter) => {
+                        return self.load_sync_plan(sync_plan, Some(limiter), task_request_receiver).await;
+                    }
+                }
+                
+                // self.load_sync_plan(sync_plan,)
+            },
+            None => {
+                return self.load_sync_plan(sync_plan, None, task_request_receiver).await;
+            }
+        }
     }
 
     async fn load_sync_plans(
         &mut self,
         sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
-        rate_limiters: Vec<Option<T>>,
-        task_request_receivers: Vec<TR>,
+        rate_limiters: Vec<Option<Self::RateLimiterType>>,
+        task_request_receivers: Vec<Self::TaskReceiverType>,
     ) -> Result<(), TaskManagerError> {
         for ((plan, limiter), task_request_receiver) in sync_plans
             .iter()
@@ -237,7 +258,6 @@ where
     async fn load_sync_plans_with_rate_limiter(
         &mut self,
         sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
-        rate_limiter_type: RateLimiterImpls,
         task_request_receivers: Vec<TR>,
     ) -> Result<(), TaskManagerError> {
         todo!();

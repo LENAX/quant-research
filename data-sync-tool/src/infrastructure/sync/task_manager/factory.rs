@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+use crate::application::synchronization::dtos::task_manager::CreateRateLimiterRequest;
+use crate::domain::synchronization::value_objects::sync_config::{RateLimiterImpls, RateQuota};
 use crate::infrastructure::sync::shared_traits::{
     FailedTaskSPMCReceiver, SyncTaskMPMCSender, TaskRequestMPMCReceiver,
 };
@@ -19,7 +21,7 @@ use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use super::sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter};
+use super::sync_rate_limiter::WebRequestRateLimiter;
 use super::{
     sync_task_queue::{QueueStatus, SyncTaskQueue},
     task_manager::TaskManager,
@@ -52,6 +54,45 @@ pub fn new_empty_limitless_queue<T: RateLimiter, TR: TaskRequestMPMCReceiver>(
     task_request_receiver: TR,
 ) -> SyncTaskQueue<T, TR> {
     return SyncTaskQueue::new(vec![], None, max_retry, sync_plan_id, task_request_receiver);
+}
+
+pub fn new_web_request_limiter(
+    max_request: u32,
+    max_daily_request: Option<u32>,
+    cooldown: Option<u32>,
+) -> WebRequestRateLimiter {
+    return WebRequestRateLimiter::new(max_request, max_daily_request, cooldown).unwrap();
+}
+
+pub fn create_rate_limiter(
+    create_limiter_req: &CreateRateLimiterRequest,
+    limiter_type: RateLimiterImpls,
+) -> Box<dyn RateLimiter> {
+    match limiter_type {
+        RateLimiterImpls::WebRequestRateLimiter => Box::new(new_web_request_limiter(
+            *create_limiter_req.max_request(),
+            *create_limiter_req.max_daily_request(),
+            *create_limiter_req.cooldown(),
+        )),
+        // handle other LimiterTypes here
+    }
+}
+
+pub enum RateLimiterInstance {
+    WebLimiter(WebRequestRateLimiter)
+}
+
+pub fn create_rate_limiter_by_rate_quota(
+    rate_quota: &RateQuota,
+) -> RateLimiterInstance {
+    match rate_quota.use_impl() {
+        RateLimiterImpls::WebRequestRateLimiter => RateLimiterInstance::WebLimiter(new_web_request_limiter(
+            *rate_quota.max_line_per_request(),
+            Some(*rate_quota.daily_limit()),
+            Some(*rate_quota.cooldown_seconds()),
+        )),
+        // handle other LimiterTypes here
+    }
 }
 
 pub fn create_sync_task_manager<

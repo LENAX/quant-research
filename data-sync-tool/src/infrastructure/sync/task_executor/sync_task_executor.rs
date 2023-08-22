@@ -53,12 +53,12 @@ use std::collections::HashMap;
 
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
-pub struct SyncTaskExecutor<LW, SW, T, TR> {
+pub struct SyncTaskExecutor<LW, SW, T: RateLimiter, TR: TaskRequestMPMCReceiver> {
     idle_long_running_workers: HashMap<Uuid, LW>,
     busy_long_running_workers: HashMap<Uuid, LW>,
     idle_short_task_handling_workers: HashMap<Uuid, SW>,
     busy_short_task_handling_workers: HashMap<Uuid, SW>,
-    task_manager: Arc<Mutex<dyn SyncTaskManager<T, TR>>>,
+    task_manager: Arc<Mutex<dyn SyncTaskManager<RateLimiterType=T, TaskReceiverType=TR>>>,
     // worker_channels: WorkerChannels,
     // task_manager_channels: TaskManagerChannels,
 }

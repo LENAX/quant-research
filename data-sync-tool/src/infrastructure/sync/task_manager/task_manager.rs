@@ -32,7 +32,7 @@ use crate::{
 use super::{
     errors::TaskManagerError,
     factory::{new_empty_limitless_queue, new_empty_queue, create_rate_limiter_by_rate_quota, RateLimiterInstance},
-    tm_traits::{SyncTaskManager, TaskManagerErrorMPSCSender, TaskSendingProgress},
+    tm_traits::{SyncTaskManager, TaskManagerErrorMPSCSender, TaskSendingProgress}, sync_rate_limiter::WebRequestRateLimiter,
 };
 use crate::infrastructure::sync::task_manager::sync_task_queue::QueueId;
 use crate::infrastructure::sync::task_manager::sync_task_queue::SyncTaskQueue;
@@ -47,39 +47,43 @@ pub enum TaskManagerState {
     Stopped,
 }
 
+// Hint: Use trait to separate TaskManager and SyncTaskQueue
+// Then use generics with trait bound
+// In this way, there is no need to pass extra generic param to build the struct.
+
 /// TaskManager
 /// TaskManger is responsible for sending tasks for each sync plan upon receiving request.
 #[derive(Derivative, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
-pub struct TaskManager<T, MT, TR, ES, MF>
+pub struct TaskManager<RL, MT, TR, ES, MF>
 where
-    T: RateLimiter,
+    RL: RateLimiter,
     MT: SyncTaskMPMCSender,
     TR: TaskRequestMPMCReceiver,
     ES: TaskManagerErrorMPSCSender,
     MF: FailedTaskSPMCReceiver,
 {
-    queues: Arc<RwLock<HashMap<QueueId, Arc<Mutex<SyncTaskQueue<T, TR>>>>>>,
+    queues: Arc<RwLock<HashMap<QueueId, Arc<Mutex<SyncTaskQueue<RL, TR>>>>>>,
     task_sender: MT,
     error_message_channel: ES,
     failed_task_channel: MF,
     current_state: TaskManagerState,
 }
 
-impl<T, MT, TR, ES, MF> TaskManager<T, MT, TR, ES, MF>
+impl<RL, MT, TR, ES, MF> TaskManager<RL, MT, TR, ES, MF>
 where
-    T: RateLimiter,
+    RL: RateLimiter,
     MT: SyncTaskMPMCSender,
     TR: TaskRequestMPMCReceiver,
     ES: TaskManagerErrorMPSCSender,
     MF: FailedTaskSPMCReceiver,
 {
     pub fn new(
-        task_queues: Vec<SyncTaskQueue<T, TR>>,
+        task_queues: Vec<SyncTaskQueue<RL, TR>>,
         task_sender: MT,
         error_message_channel: ES,
         failed_task_channel: MF,
-    ) -> TaskManager<T, MT, TR, ES, MF> {
+    ) -> TaskManager<RL, MT, TR, ES, MF> {
         let mut q_map = HashMap::new();
         task_queues.into_iter().for_each(|q| {
             q_map.insert(*q.sync_plan_id(), Arc::new(Mutex::new(q)));
@@ -93,7 +97,7 @@ where
         }
     }
 
-    pub async fn add_queue(&mut self, task_queue: SyncTaskQueue<T, TR>) {
+    pub async fn add_queue(&mut self, task_queue: SyncTaskQueue<RL, TR>) {
         let mut q_lock = self.queues.write().await;
         q_lock.insert(*task_queue.sync_plan_id(), Arc::new(Mutex::new(task_queue)));
     }
@@ -134,16 +138,16 @@ where
 }
 
 #[async_trait]
-impl<T, MT, TR, ES, MF> SyncTaskManager for TaskManager<T, MT, TR, ES, MF>
+impl<RL, MT, TR, ES, MF> SyncTaskManager for TaskManager<RL, MT, TR, ES, MF>
 where
-    T: RateLimiter + 'static,
+    RL: RateLimiter + 'static,
     MT: SyncTaskMPMCSender + Clone,
     TR: TaskRequestMPMCReceiver,
     ES: TaskManagerErrorMPSCSender + Clone,
     MF: FailedTaskSPMCReceiver + Clone,
 {
+    type RateLimiterType = RL;
     type TaskReceiverType = TR;
-    type RateLimiterType = T;
 
     async fn add_tasks_to_plan(
         &mut self,
@@ -167,11 +171,11 @@ where
         Ok(unsent_tasks)
     }
 
-    async fn load_sync_plan(
+    async fn load_sync_plan<R: RateLimiter + 'static, T: TaskRequestMPMCReceiver>(
         &mut self,
         sync_plan: Arc<Mutex<SyncPlan>>,
-        rate_limiter: Option<Self::RateLimiterType>,
-        task_request_receiver: Self::TaskReceiverType,
+        rate_limiter: Option<R>,
+        task_request_receiver: T,
     ) -> Result<(), TaskManagerError> {
         let plan_lock = sync_plan.lock().await;
         let sync_config = plan_lock.sync_config();
@@ -222,8 +226,6 @@ where
                         return self.load_sync_plan(sync_plan, Some(limiter), task_request_receiver).await;
                     }
                 }
-                
-                // self.load_sync_plan(sync_plan,)
             },
             None => {
                 return self.load_sync_plan(sync_plan, None, task_request_receiver).await;
@@ -234,8 +236,8 @@ where
     async fn load_sync_plans(
         &mut self,
         sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
-        rate_limiters: Vec<Option<Self::RateLimiterType>>,
-        task_request_receivers: Vec<Self::TaskReceiverType>,
+        rate_limiters: Vec<Option<RL>>,
+        task_request_receivers: Vec<TR>,
     ) -> Result<(), TaskManagerError> {
         for ((plan, limiter), task_request_receiver) in sync_plans
             .iter()
@@ -504,7 +506,7 @@ where
                 let receive_result = failed_task_channel_lock.try_recv();
                 match receive_result {
                     Ok((_, failed_task)) => {
-                        let queues: tokio::sync::RwLockReadGuard<'_, HashMap<Uuid, Arc<Mutex<SyncTaskQueue<T, TR>>>>> = queues_ref.read().await;
+                        let queues: tokio::sync::RwLockReadGuard<'_, HashMap<Uuid, Arc<Mutex<SyncTaskQueue<RL, TR>>>>> = queues_ref.read().await;
                         let task_lock = failed_task.lock().await;
                         let q_key = task_lock.sync_plan_id().unwrap_or(Uuid::new_v4());
                         drop(task_lock);
@@ -559,7 +561,7 @@ mod tests {
                 },
             },
             sync::{
-                task_manager::sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter},
+                task_manager::sync_rate_limiter::WebRequestRateLimiter,
                 GetTaskRequest,
             },
             // sync::{sync_rate_limiter::{new_web_request_limiter, WebRequestRateLimiter}, GetTaskRequest},
@@ -647,12 +649,12 @@ mod tests {
             .collect()
     }
 
-    pub fn new_queue_with_random_amount_of_tasks<T: RateLimiter, TR: TaskRequestMPMCReceiver>(
-        rate_limiter: T,
+    pub fn new_queue_with_random_amount_of_tasks<RL: RateLimiter, TR: TaskRequestMPMCReceiver>(
+        rate_limiter: RL,
         task_request_receiver: TR,
         min_tasks: u32,
         max_tasks: u32,
-    ) -> SyncTaskQueue<T, TR> {
+    ) -> SyncTaskQueue<RL, TR> {
         let mut rng = rand::thread_rng();
         let max_retry = rng.gen_range(10..20);
         let sync_plan_id = Uuid::new_v4();

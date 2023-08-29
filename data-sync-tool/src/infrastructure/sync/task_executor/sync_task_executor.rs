@@ -53,22 +53,21 @@ use std::collections::HashMap;
 
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
-pub struct SyncTaskExecutor<LW, SW, T: RateLimiter, TR: TaskRequestMPMCReceiver> {
+pub struct SyncTaskExecutor<LW, SW, TM> {
     idle_long_running_workers: HashMap<Uuid, LW>,
     busy_long_running_workers: HashMap<Uuid, LW>,
     idle_short_task_handling_workers: HashMap<Uuid, SW>,
     busy_short_task_handling_workers: HashMap<Uuid, SW>,
-    task_manager: Arc<Mutex<dyn SyncTaskManager<RateLimiterType=T, TaskReceiverType=TR>>>,
+    task_manager: Arc<Mutex<TM>>,
     // worker_channels: WorkerChannels,
     // task_manager_channels: TaskManagerChannels,
 }
 
-impl<LW, SW, T, TR> SyncTaskExecutor<LW, SW, T, TR>
+impl<LW, SW, TM> SyncTaskExecutor<LW, SW, TM>
 where
     LW: LongRunningWorker,
     SW: ShortRunningWorker,
-    T: RateLimiter,
-    TR: TaskRequestMPMCReceiver
+    TM: SyncTaskManager
 {
     pub fn new() -> Self {
         todo!()
@@ -81,17 +80,16 @@ where
 }
 
 #[async_trait]
-impl<LW, SW, T, TR> TaskExecutor for SyncTaskExecutor<LW, SW, T, TR> 
+impl<LW, SW, TM> TaskExecutor for SyncTaskExecutor<LW, SW, TM> 
 where
     LW: LongRunningWorker,
     SW: ShortRunningWorker,
-    T: RateLimiter,
-    TR: TaskRequestMPMCReceiver
+    TM: SyncTaskManager
 {
     // add new sync plans to synchronize
     async fn assign(&mut self, sync_plans: Vec<Arc<Mutex<SyncPlan>>>) -> Result<(), TaskExecutorError> {
         let task_manager_lock = self.task_manager.lock().await;
-        let _ = task_manager_lock.load_sync_plans(sync_plans, rate_limiters, task_request_receivers).await;
+        let _ = task_manager_lock.load_sync_plans_with_rate_limiter(sync_plans);
     }
 
     // run a single plan. Either start a new plan or continue a paused plan

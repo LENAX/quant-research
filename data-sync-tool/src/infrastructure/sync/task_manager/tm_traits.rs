@@ -117,8 +117,8 @@ impl TaskSendingProgress {
 
 #[async_trait]
 pub trait SyncTaskManager: Sync + Send {
-    type RateLimiterType: RateLimiter;
-    type TaskReceiverType: TaskRequestMPMCReceiver;
+    type RateLimiterType;
+    type TaskReceiverType;
 
     // start syncing all plans by sending tasks out to workers
     async fn listen_for_get_task_request(&mut self) -> Result<(), TaskManagerError>;
@@ -136,30 +136,30 @@ pub trait SyncTaskManager: Sync + Send {
     ) -> Result<(), TaskManagerError>;
 
     // add new plans to sync
-    async fn load_sync_plan(
+    async fn load_sync_plan<R: RateLimiter + 'static, T: TaskRequestMPMCReceiver>(
         &mut self,
         sync_plan: Arc<Mutex<SyncPlan>>,
-        rate_limiter: Option<Self::RateLimiterType>,
-        task_request_receiver: Self::TaskReceiverType,
+        rate_limiter: Option<R>,
+        task_request_receiver: T,
     ) -> Result<(), TaskManagerError>;
 
-    async fn load_sync_plan_with_limiter(
+    async fn load_sync_plan_with_limiter<TR>(
         &mut self,
         sync_plan: Arc<Mutex<SyncPlan>>,
-        task_request_receiver: Self::TaskReceiverType,
+        task_request_receiver: TR,
     ) -> Result<(), TaskManagerError>;
 
-    async fn load_sync_plans(
+    async fn load_sync_plans<RL, TR>(
         &mut self,
         sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
-        rate_limiters: Vec<Option<Self::RateLimiterType>>,
-        task_request_receivers: Vec<Self::TaskReceiverType>,
+        rate_limiters: Vec<Option<RL>>,
+        task_request_receivers: Vec<TR>,
     ) -> Result<(), TaskManagerError>;
 
-    async fn load_sync_plans_with_rate_limiter(
+    async fn load_sync_plans_with_rate_limiter<TR>(
         &mut self,
         sync_plan: Vec<Arc<Mutex<SyncPlan>>>,
-        task_request_receiver: Vec<Self::TaskReceiverType>,
+        task_request_receiver: Vec<TR>,
     ) -> Result<(), TaskManagerError>;
 
     // stop syncing given the id, but it is resumable

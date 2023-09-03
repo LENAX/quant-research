@@ -22,8 +22,8 @@ use async_trait::async_trait;
 use derivative::Derivative;
 use getset::{Getters, MutGetters, Setters};
 // use serde_json::Value;
-use crate::{domain::synchronization::{task_executor::{TaskExecutor, TaskExecutorError, SyncProgress}, sync_plan::SyncPlan, rate_limiter::RateLimiter}, infrastructure::sync::{workers::worker_traits::{LongRunningWorker, ShortRunningWorker}, task_manager::{tm_traits::SyncTaskManager, sync_task_queue::SyncTaskQueue}, shared_traits::TaskRequestMPMCReceiver}};
-use std::sync::Arc;
+use crate::{domain::synchronization::{task_executor::{TaskExecutor, TaskExecutorError, SyncProgress}, sync_plan::SyncPlan, rate_limiter::RateLimiter, sync_task::SyncTask}, infrastructure::{sync::{workers::{worker_traits::{LongRunningWorker, ShortRunningWorker}, worker::{WebAPISyncWorker, WebsocketSyncWorker}}, task_manager::{tm_traits::SyncTaskManager, sync_task_queue::SyncTaskQueue, factory::{SyncTaskQueueBuilder, new_web_request_limiter}, sync_rate_limiter::WebRequestRateLimiter, task_manager::TaskManager}, shared_traits::TaskRequestMPMCReceiver, factory::Builder, GetTaskRequest}, mq::{factory::create_tokio_broadcasting_channel, tokio_channel_mq::{TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender, TokioMpscMessageBusSender}}}};
+use std::{sync::Arc, collections::VecDeque};
 use tokio::sync::{RwLock, Mutex};
 use uuid::Uuid;
 use std::collections::HashMap;
@@ -53,12 +53,23 @@ use std::collections::HashMap;
 
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
-pub struct SyncTaskExecutor<LW, SW, TM> {
-    idle_long_running_workers: HashMap<Uuid, LW>,
-    busy_long_running_workers: HashMap<Uuid, LW>,
+pub struct SyncTaskExecutor {
+    idle_long_running_workers: HashMap<Uuid, WebAPISyncWorker<
+        TokioMpscMessageBusSender<GetTaskRequest>,
+        TokioBroadcastingMessageBusReceiver<SyncTask>,
+        TokioBroadcastingMessageBusSender<SyncTask>,
+        TokioBroadcastingMessageBusSender<SyncTask>,
+    >>,
+    busy_long_running_workers: HashMap<Uuid, WebsocketSyncWorker<
+        TokioMpscMessageBusSender<GetTaskRequest>,
+        
+    >>,
     idle_short_task_handling_workers: HashMap<Uuid, SW>,
     busy_short_task_handling_workers: HashMap<Uuid, SW>,
-    task_manager: Arc<Mutex<TM>>,
+    task_manager: Arc<Mutex<
+        TaskManager<
+            SyncTaskQueue<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>,
+            TokioBroadcastingMessageBusSender<Sync>>>>,
     // worker_channels: WorkerChannels,
     // task_manager_channels: TaskManagerChannels,
 }
@@ -89,8 +100,49 @@ where
     // add new sync plans to synchronize
     async fn assign(&mut self, sync_plans: Vec<Arc<Mutex<SyncPlan>>>) -> Result<(), TaskExecutorError> {
         let task_manager_lock = self.task_manager.lock().await;
-        let new_task_queue = new_task
-        // let _ = task_manager_lock.load_sync_plans(sync_plans);
+        let (task_sender, task_receiver) = create_tokio_broadcasting_channel::<GetTaskRequest>(200);
+        let new_task_queues = sync_plans.iter().map(|p| {
+            let plan_lock = p.blocking_lock();
+            
+            let task_queue_builder: SyncTaskQueueBuilder<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>> = SyncTaskQueueBuilder::new();
+            
+            match plan_lock.sync_config().sync_rate_quota() {
+                Some(quota) => {
+                    let rate_limiter = new_web_request_limiter(
+                        *quota.max_line_per_request(), Some(*quota.daily_limit()), Some(*quota.cooldown_seconds()));
+                    let _task_queue = plan_lock.tasks().iter().map(|t| {
+                        Arc::new(Mutex::new(t.clone()))
+                    }).collect::<VecDeque<_>>();
+                    let new_task_queue = task_queue_builder
+                        .initial_size(plan_lock.tasks().len())
+                        .rate_limiter(rate_limiter)
+                        .retries_left(*quota.max_retry())
+                        .task_request_receiver(task_receiver.clone())
+                        .max_retry(*quota.max_retry())
+                        .sync_plan_id(*plan_lock.id())
+                        .tasks(_task_queue)
+                        .build();
+                    return new_task_queue;
+                },
+                None => {
+                    let _task_queue = plan_lock.tasks().iter().map(|t| {
+                        Arc::new(Mutex::new(t.clone()))
+                    }).collect::<VecDeque<_>>();
+                    let new_task_queue = task_queue_builder
+                        .initial_size(plan_lock.tasks().len())
+                        .retries_left(10)
+                        .task_request_receiver(task_receiver.clone())
+                        .max_retry(10)
+                        .sync_plan_id(*plan_lock.id())
+                        .tasks(_task_queue)
+                        .build();
+                    return new_task_queue;
+                }
+            }
+            
+        }).collect::<Vec<_>>();
+        task_manager_lock.load_sync_plans(sync_plans, new_task_queues);
+        Ok(())
     }
 
     // run a single plan. Either start a new plan or continue a paused plan

@@ -128,6 +128,9 @@ pub trait SyncTaskManager: Sync + Send {
         &mut self,
     ) -> Result<HashMap<Uuid, Vec<Arc<Mutex<SyncTask>>>>, TaskManagerError>;
 
+    async fn new_empty_queue(&self, sync_plan: Arc<Mutex<SyncPlan>>, task_request_receiver: TokioBroadcastingMessageBusReceiver<GetTaskRequest>) -> Self::TaskQueueType;
+    async fn new_empty_queues(&self, sync_plan: Arc<Mutex<SyncPlan>>, task_request_receivers: Vec<impl TaskRequestMPMCReceiver>) -> Self::TaskQueueType;
+
     // When need add new tasks ad hoc, use this method
     async fn add_tasks_to_plan(
         &mut self,

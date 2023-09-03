@@ -26,6 +26,10 @@ pub struct SyncProgress {
 
 #[async_trait]
 pub trait TaskExecutor: Sync + Send {
+    type TaskManagerType;
+    type LongRunningWorkerType;
+    type ShortRunningWorkerType;
+
     // add new sync plans to synchronize
     async fn assign(&mut self, sync_plans: Vec<Arc<Mutex<SyncPlan>>>) -> Result<(), TaskExecutorError>;
 

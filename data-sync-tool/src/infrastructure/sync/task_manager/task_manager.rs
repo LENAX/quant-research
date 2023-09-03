@@ -2,7 +2,7 @@
 //! Defines synchronization task queue and a manager module to support task polling, scheduling and throttling.
 //!
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::{HashMap, VecDeque}, sync::Arc};
 
 use async_trait::async_trait;
 use derivative::Derivative;
@@ -23,15 +23,15 @@ use crate::{
     domain::synchronization::{
         sync_plan::SyncPlan, sync_task::SyncTask,
     },
-    infrastructure::sync::{
-        shared_traits::{FailedTaskSPMCReceiver, SyncTaskMPMCSender},
-        task_manager::errors::QueueError,
-    },
+    infrastructure::{sync::{
+        shared_traits::{FailedTaskSPMCReceiver, SyncTaskMPMCSender, TaskRequestMPMCReceiver},
+        task_manager::errors::QueueError, GetTaskRequest, factory::Builder,
+    }, mq::tokio_channel_mq::TokioBroadcastingMessageBusReceiver},
 };
 
 use super::{
     errors::TaskManagerError,
-    tm_traits::{SyncTaskManager, TaskManagerErrorMPSCSender, TaskSendingProgress}, task_queue::TaskQueue,
+    tm_traits::{SyncTaskManager, TaskManagerErrorMPSCSender, TaskSendingProgress}, task_queue::TaskQueue, sync_task_queue::SyncTaskQueue, sync_rate_limiter::WebRequestRateLimiter, factory::{new_web_request_limiter, SyncTaskQueueBuilder},
 };
 use crate::infrastructure::sync::task_manager::sync_task_queue::QueueId;
 
@@ -141,6 +141,7 @@ where
     ES: TaskManagerErrorMPSCSender + Clone,
     MF: FailedTaskSPMCReceiver + Clone,
 {
+    // type TaskQueueType = SyncTaskQueue<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>;
     type TaskQueueType = TQ;
 
     async fn add_tasks_to_plan(
@@ -163,6 +164,48 @@ where
             unsent_tasks.insert(queue_lock.get_plan_id(), remaining_tasks);
         }
         Ok(unsent_tasks)
+    }
+
+    async fn new_empty_queue(&self, sync_plan: Arc<Mutex<SyncPlan>>, task_request_receiver: TokioBroadcastingMessageBusReceiver<GetTaskRequest>) -> Self::TaskQueueType {
+        let plan_lock = sync_plan.lock().await;
+        let task_queue_builder: SyncTaskQueueBuilder<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>> = SyncTaskQueueBuilder::new();
+        match plan_lock.sync_config().sync_rate_quota() {
+            Some(quota) => {
+                let rate_limiter = new_web_request_limiter(
+                    *quota.max_line_per_request(), Some(*quota.daily_limit()), Some(*quota.cooldown_seconds()));
+                let _task_queue = plan_lock.tasks().iter().map(|t| {
+                    Arc::new(Mutex::new(t.clone()))
+                }).collect::<VecDeque<_>>();
+                let new_task_queue = task_queue_builder
+                    .initial_size(plan_lock.tasks().len())
+                    .rate_limiter(rate_limiter)
+                    .retries_left(*quota.max_retry())
+                    .task_request_receiver(task_request_receiver)
+                    .max_retry(*quota.max_retry())
+                    .sync_plan_id(*plan_lock.id())
+                    .tasks(_task_queue)
+                    .build();
+                return new_task_queue;
+            },
+            None => {
+                let _task_queue = plan_lock.tasks().iter().map(|t| {
+                    Arc::new(Mutex::new(t.clone()))
+                }).collect::<VecDeque<_>>();
+                let new_task_queue = task_queue_builder
+                    .initial_size(plan_lock.tasks().len())
+                    .retries_left(10)
+                    .task_request_receiver(task_receiver.clone())
+                    .max_retry(10)
+                    .sync_plan_id(*plan_lock.id())
+                    .tasks(_task_queue)
+                    .build();
+                return new_task_queue;
+            }
+        }
+    }
+
+    async fn new_empty_queues(&self, sync_plan: Arc<Mutex<SyncPlan>>, task_request_receivers: Vec<impl TaskRequestMPMCReceiver>) -> Self::TaskQueueType {
+        todo!()
     }
 
     async fn load_sync_plan(

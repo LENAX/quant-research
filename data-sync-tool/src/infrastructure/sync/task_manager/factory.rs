@@ -164,7 +164,7 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> Builder for SyncTaskQueueBuild
             rate_limiter: None,
             max_retry: None,
             retries_left: None,
-            status: None,
+            status: Some(QueueStatus::default()),
             initial_size: None,
         }
     }

@@ -29,6 +29,7 @@ use crate::{
 };
 
 use super::errors::TaskManagerError;
+use super::task_queue::TaskQueue;
 
 trait SyncTaskMpscSender: MessageBusSender<Arc<Mutex<SyncTask>>> + StaticClonableMpscMQ {}
 trait SyncTaskMpscReceiver: MessageBusReceiver<Arc<Mutex<SyncTask>>> + StaticMpscMQReceiver {}
@@ -117,8 +118,7 @@ impl TaskSendingProgress {
 
 #[async_trait]
 pub trait SyncTaskManager: Sync + Send {
-    type RateLimiterType;
-    type TaskReceiverType;
+    type TaskQueueType;
 
     // start syncing all plans by sending tasks out to workers
     async fn listen_for_get_task_request(&mut self) -> Result<(), TaskManagerError>;
@@ -136,30 +136,16 @@ pub trait SyncTaskManager: Sync + Send {
     ) -> Result<(), TaskManagerError>;
 
     // add new plans to sync
-    async fn load_sync_plan<R: RateLimiter + 'static, T: TaskRequestMPMCReceiver>(
+    async fn load_sync_plan(
         &mut self,
         sync_plan: Arc<Mutex<SyncPlan>>,
-        rate_limiter: Option<R>,
-        task_request_receiver: T,
+        queue: Self::TaskQueueType,
     ) -> Result<(), TaskManagerError>;
 
-    async fn load_sync_plan_with_limiter<TR>(
-        &mut self,
-        sync_plan: Arc<Mutex<SyncPlan>>,
-        task_request_receiver: TR,
-    ) -> Result<(), TaskManagerError>;
-
-    async fn load_sync_plans<RL, TR>(
+    async fn load_sync_plans(
         &mut self,
         sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
-        rate_limiters: Vec<Option<RL>>,
-        task_request_receivers: Vec<TR>,
-    ) -> Result<(), TaskManagerError>;
-
-    async fn load_sync_plans_with_rate_limiter<TR>(
-        &mut self,
-        sync_plan: Vec<Arc<Mutex<SyncPlan>>>,
-        task_request_receiver: Vec<TR>,
+        queues: Vec<Self::TaskQueueType>,
     ) -> Result<(), TaskManagerError>;
 
     // stop syncing given the id, but it is resumable

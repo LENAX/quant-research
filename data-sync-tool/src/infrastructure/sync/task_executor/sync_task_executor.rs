@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use derivative::Derivative;
 use getset::{Getters, MutGetters, Setters};
 // use serde_json::Value;
-use crate::{domain::synchronization::{task_executor::{TaskExecutor, TaskExecutorError, SyncProgress}, sync_plan::SyncPlan, rate_limiter::RateLimiter}, infrastructure::sync::{workers::worker_traits::{LongRunningWorker, ShortRunningWorker}, task_manager::tm_traits::SyncTaskManager, shared_traits::TaskRequestMPMCReceiver}};
+use crate::{domain::synchronization::{task_executor::{TaskExecutor, TaskExecutorError, SyncProgress}, sync_plan::SyncPlan, rate_limiter::RateLimiter}, infrastructure::sync::{workers::worker_traits::{LongRunningWorker, ShortRunningWorker}, task_manager::{tm_traits::SyncTaskManager, sync_task_queue::SyncTaskQueue}, shared_traits::TaskRequestMPMCReceiver}};
 use std::sync::Arc;
 use tokio::sync::{RwLock, Mutex};
 use uuid::Uuid;
@@ -89,7 +89,8 @@ where
     // add new sync plans to synchronize
     async fn assign(&mut self, sync_plans: Vec<Arc<Mutex<SyncPlan>>>) -> Result<(), TaskExecutorError> {
         let task_manager_lock = self.task_manager.lock().await;
-        let _ = task_manager_lock.load_sync_plans_with_rate_limiter(sync_plans);
+        let new_task_queue = new_task
+        // let _ = task_manager_lock.load_sync_plans(sync_plans);
     }
 
     // run a single plan. Either start a new plan or continue a paused plan

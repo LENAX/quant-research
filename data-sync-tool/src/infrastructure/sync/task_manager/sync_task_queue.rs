@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use tokio::sync::Mutex;
 /**
  * Synchronization Task Queue
@@ -16,7 +17,7 @@ use crate::{
 
 use super::{
     errors::{CooldownTimerTask, QueueError, TimeSecondLeft},
-    factory::SyncTaskQueueBuilder,
+    factory::SyncTaskQueueBuilder, task_queue::TaskQueue,
 };
 
 use std::{collections::VecDeque, ops::RangeBounds, sync::Arc};
@@ -50,26 +51,26 @@ pub enum QueueStatus {
 
 #[derive(Derivative, Getters, Setters, Debug, MutGetters)]
 #[getset(get = "pub", set = "pub", get_mut = "pub")]
-pub struct SyncTaskQueue<T: RateLimiter, TR: TaskRequestMPMCReceiver> {
+pub struct SyncTaskQueue<RL: RateLimiter, TR: TaskRequestMPMCReceiver> {
     sync_plan_id: Uuid,
     tasks: VecDeque<Arc<Mutex<SyncTask>>>,
     // used to listen for a poll request
     task_request_receiver: TR,
-    rate_limiter: Option<T>,
+    rate_limiter: Option<RL>,
     max_retry: Option<u32>,
     retries_left: Option<u32>,
     status: QueueStatus,
     initial_size: usize,
 }
 
-impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
+impl<RL: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<RL, TR> {
     pub fn new(
         tasks: Vec<Arc<Mutex<SyncTask>>>,
-        rate_limiter: Option<T>,
+        rate_limiter: Option<RL>,
         max_retry: Option<u32>,
         sync_plan_id: Uuid,
         task_request_receiver: TR,
-    ) -> SyncTaskQueue<T, TR> {
+    ) -> SyncTaskQueue<RL, TR> {
         let task_queue = VecDeque::from(tasks);
         let total_tasks = task_queue.len();
         SyncTaskQueue {
@@ -84,26 +85,29 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
         }
     }
 
-    pub fn builder() -> SyncTaskQueueBuilder<T, TR> {
+    pub fn builder() -> SyncTaskQueueBuilder<RL, TR> {
         return SyncTaskQueueBuilder::new();
     }
+}
 
-    pub fn start_sending_tasks(&mut self) {
+#[async_trait]
+impl<RL: RateLimiter, TR: TaskRequestMPMCReceiver> TaskQueue for SyncTaskQueue<RL, TR> {
+    fn start_sending_tasks(&mut self) {
         self.status = QueueStatus::SendingTasks;
         info!("Queue {} has start sending tasks.", self.sync_plan_id);
     }
 
-    pub fn pause(&mut self) {
+    fn pause(&mut self) {
         self.status = QueueStatus::Paused;
         info!("Queue {} has been paused.", self.sync_plan_id);
     }
 
-    pub fn resume(&mut self) {
+    fn resume(&mut self) {
         self.status = QueueStatus::SendingTasks;
         info!("Queue {}'s status has set to resumed.", self.sync_plan_id);
     }
 
-    pub fn finished(&mut self) {
+    fn finished(&mut self) {
         self.status = QueueStatus::Finished;
         info!(
             "Queue {}'s status has finished sending tasks.",
@@ -111,13 +115,29 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
         );
     }
 
-    pub fn stop(&mut self) -> Vec<Arc<Mutex<SyncTask>>> {
+    fn stop(&mut self) -> Vec<Arc<Mutex<SyncTask>>> {
         self.drain_all()
+    }
+
+    fn get_plan_id(&self) -> Uuid {
+        *self.sync_plan_id()
+    }
+
+    fn initial_size(&self) -> usize {
+        *self.initial_size()
+    }
+
+    fn retries_left(&self) -> Option<u32> {
+        *self.retries_left()
+    }
+
+    fn set_retries_left(&mut self, n_retry: u32) {
+        self.set_retries_left(Some(n_retry));
     }
 
     /// Listens for task fetching request. Try to fetch a task of the queue if received such request
     /// Otherwise it will block and yield to other async task
-    pub async fn wait_and_fetch_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, QueueError> {
+    async fn wait_and_fetch_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, QueueError> {
         let task_fetch_request_recv_result = self.task_request_receiver.receive().await;
         match task_fetch_request_recv_result {
             None => {
@@ -142,7 +162,7 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
 
     async fn try_fetch_task(
         tasks: &mut VecDeque<Arc<Mutex<SyncTask>>>,
-        rate_limiter: &mut T,
+        rate_limiter: &mut impl RateLimiter,
     ) -> Result<Arc<Mutex<SyncTask>>, QueueError> {
         let rate_limiter_response = rate_limiter.can_proceed().await;
         match rate_limiter_response {
@@ -174,7 +194,7 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
         }
     }
 
-    pub async fn pop_front(&mut self) -> Result<Arc<Mutex<SyncTask>>, QueueError> {
+    async fn pop_front(&mut self) -> Result<Arc<Mutex<SyncTask>>, QueueError> {
         //! try to pop the front of the task queue
         //! if the queue is empty, or the queue has a rate limiter, and the rate limiter rejects the request, return None
         match self.status {
@@ -223,7 +243,7 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
         }
     }
 
-    pub fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Vec<Arc<Mutex<SyncTask>>> {
+    fn drain<R: RangeBounds<usize>>(&mut self, range: R) -> Vec<Arc<Mutex<SyncTask>>> {
         //! Pops all elements in the queue given the range
         //! Typically used when the remote reports a daily limited reached error
         // let mut q_lock = .lock().await;
@@ -232,13 +252,13 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
         return values.collect::<Vec<_>>();
     }
 
-    pub fn drain_all(&mut self) -> Vec<Arc<Mutex<SyncTask>>> {
+    fn drain_all(&mut self) -> Vec<Arc<Mutex<SyncTask>>> {
         let values = self.tasks.drain(0..self.len());
         self.status = QueueStatus::Stopped;
         return values.collect::<Vec<_>>();
     }
 
-    pub fn push_back(&mut self, task: Arc<Mutex<SyncTask>>) {
+    fn push_back(&mut self, task: Arc<Mutex<SyncTask>>) {
         self.tasks.push_back(task);
 
         // Update initial size if current length execeeds initial size
@@ -248,7 +268,7 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
         return ();
     }
 
-    pub fn push_front(&mut self, task: Arc<Mutex<SyncTask>>) {
+    fn push_front(&mut self, task: Arc<Mutex<SyncTask>>) {
         self.tasks.push_front(task);
         // Update initial size if current length execeeds initial size
         if self.len() > self.initial_size {
@@ -257,35 +277,35 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
         return ();
     }
 
-    pub fn front(&self) -> Option<&Arc<Mutex<SyncTask>>> {
+    fn front(&self) -> Option<&Arc<Mutex<SyncTask>>> {
         self.tasks.front()
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         return self.tasks.is_empty();
     }
 
-    pub fn is_finished(&self) -> bool {
+    fn is_finished(&self) -> bool {
         return self.status == QueueStatus::Finished;
     }
 
-    pub fn is_running(&self) -> bool {
+    fn is_running(&self) -> bool {
         return self.status == QueueStatus::SendingTasks;
     }
 
-    pub fn is_paused(&self) -> bool {
+    fn is_paused(&self) -> bool {
         return self.status == QueueStatus::Paused;
     }
 
-    pub fn is_stopped(&self) -> bool {
+    fn is_stopped(&self) -> bool {
         return self.status == QueueStatus::Stopped;
     }
 
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         return self.tasks.len();
     }
 
-    pub fn can_retry(&self) -> bool {
+    fn can_retry(&self) -> bool {
         match self.max_retry {
             Some(max_retry) => {
                 if let Some(n_retry) = self.retries_left {
@@ -300,7 +320,7 @@ impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<T, TR> {
         }
     }
 
-    pub fn retry(&mut self, task: Arc<Mutex<SyncTask>>) {
+    fn retry(&mut self, task: Arc<Mutex<SyncTask>>) {
         if self.can_retry() {
             self.push_back(task)
         }

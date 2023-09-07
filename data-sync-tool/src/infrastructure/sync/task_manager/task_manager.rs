@@ -2,7 +2,10 @@
 //! Defines synchronization task queue and a manager module to support task polling, scheduling and throttling.
 //!
 
-use std::{collections::{HashMap, VecDeque}, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use derivative::Derivative;
@@ -20,18 +23,25 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::{
-    domain::synchronization::{
-        sync_plan::SyncPlan, sync_task::SyncTask,
+    domain::synchronization::{sync_plan::SyncPlan, sync_task::SyncTask},
+    infrastructure::{
+        mq::tokio_channel_mq::TokioBroadcastingMessageBusReceiver,
+        sync::{
+            factory::Builder,
+            shared_traits::{FailedTaskSPMCReceiver, SyncTaskMPMCSender, TaskRequestMPMCReceiver},
+            task_manager::errors::QueueError,
+            GetTaskRequest,
+        },
     },
-    infrastructure::{sync::{
-        shared_traits::{FailedTaskSPMCReceiver, SyncTaskMPMCSender, TaskRequestMPMCReceiver},
-        task_manager::errors::QueueError, GetTaskRequest, factory::Builder,
-    }, mq::tokio_channel_mq::TokioBroadcastingMessageBusReceiver},
 };
 
 use super::{
     errors::TaskManagerError,
-    tm_traits::{SyncTaskManager, TaskManagerErrorMPSCSender, TaskSendingProgress}, task_queue::TaskQueue, sync_task_queue::SyncTaskQueue, sync_rate_limiter::WebRequestRateLimiter, factory::{new_web_request_limiter, SyncTaskQueueBuilder},
+    factory::{new_web_request_limiter, SyncTaskQueueBuilder},
+    sync_rate_limiter::WebRequestRateLimiter,
+    sync_task_queue::SyncTaskQueue,
+    task_queue::TaskQueue,
+    tm_traits::{SyncTaskManager, TaskManagerErrorMPSCSender, TaskSendingProgress},
 };
 use crate::infrastructure::sync::task_manager::sync_task_queue::QueueId;
 
@@ -98,7 +108,11 @@ where
         q_lock.insert(task_queue.get_plan_id(), Arc::new(Mutex::new(task_queue)));
     }
 
-    pub async fn add_tasks_to_queue(&mut self, queue_id: QueueId, tasks: Vec<Arc<Mutex<SyncTask>>>) {
+    pub async fn add_tasks_to_queue(
+        &mut self,
+        queue_id: QueueId,
+        tasks: Vec<Arc<Mutex<SyncTask>>>,
+    ) {
         let queues = self.queues.read().await;
         let q_result = queues.get(&queue_id);
 
@@ -166,16 +180,28 @@ where
         Ok(unsent_tasks)
     }
 
-    async fn new_empty_queue(&self, sync_plan: Arc<Mutex<SyncPlan>>, task_request_receiver: TokioBroadcastingMessageBusReceiver<GetTaskRequest>) -> Self::TaskQueueType {
+    async fn new_empty_queue(
+        &self,
+        sync_plan: Arc<Mutex<SyncPlan>>,
+        task_request_receiver: TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
+    ) -> Self::TaskQueueType {
         let plan_lock = sync_plan.lock().await;
-        let task_queue_builder: SyncTaskQueueBuilder<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>> = SyncTaskQueueBuilder::new();
+        let task_queue_builder: SyncTaskQueueBuilder<
+            WebRequestRateLimiter,
+            TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
+        > = SyncTaskQueueBuilder::new();
         match plan_lock.sync_config().sync_rate_quota() {
             Some(quota) => {
                 let rate_limiter = new_web_request_limiter(
-                    *quota.max_line_per_request(), Some(*quota.daily_limit()), Some(*quota.cooldown_seconds()));
-                let _task_queue = plan_lock.tasks().iter().map(|t| {
-                    Arc::new(Mutex::new(t.clone()))
-                }).collect::<VecDeque<_>>();
+                    *quota.max_line_per_request(),
+                    Some(*quota.daily_limit()),
+                    Some(*quota.cooldown_seconds()),
+                );
+                let _task_queue = plan_lock
+                    .tasks()
+                    .iter()
+                    .map(|t| Arc::new(Mutex::new(t.clone())))
+                    .collect::<VecDeque<_>>();
                 let new_task_queue = task_queue_builder
                     .initial_size(plan_lock.tasks().len())
                     .rate_limiter(rate_limiter)
@@ -186,11 +212,13 @@ where
                     .tasks(_task_queue)
                     .build();
                 return new_task_queue;
-            },
+            }
             None => {
-                let _task_queue = plan_lock.tasks().iter().map(|t| {
-                    Arc::new(Mutex::new(t.clone()))
-                }).collect::<VecDeque<_>>();
+                let _task_queue = plan_lock
+                    .tasks()
+                    .iter()
+                    .map(|t| Arc::new(Mutex::new(t.clone())))
+                    .collect::<VecDeque<_>>();
                 let new_task_queue = task_queue_builder
                     .initial_size(plan_lock.tasks().len())
                     .retries_left(10)
@@ -204,7 +232,11 @@ where
         }
     }
 
-    async fn new_empty_queues(&self, sync_plan: Arc<Mutex<SyncPlan>>, task_request_receivers: Vec<impl TaskRequestMPMCReceiver>) -> Self::TaskQueueType {
+    async fn new_empty_queues(
+        &self,
+        sync_plan: Arc<Mutex<SyncPlan>>,
+        task_request_receivers: Vec<impl TaskRequestMPMCReceiver>,
+    ) -> Self::TaskQueueType {
         todo!()
     }
 
@@ -216,14 +248,18 @@ where
         let plan_lock = sync_plan.lock().await;
         let sync_config = plan_lock.sync_config();
         let plan_id = *plan_lock.id();
-        
-        let quota = sync_config.sync_rate_quota()
-                    .as_ref()
-                    .ok_or(TaskManagerError::MissingRateLimitParam)?;
+
+        let quota = sync_config
+            .sync_rate_quota()
+            .as_ref()
+            .ok_or(TaskManagerError::MissingRateLimitParam)?;
 
         // let mut queue = new_empty_queue(rate_limiter, task_request_receiver, Some(*quota.max_retry()), plan_id);
-        plan_lock.tasks().iter().for_each(|t| {queue.push_back(Arc::new(Mutex::new(*t)))});
-        
+        plan_lock
+            .tasks()
+            .iter()
+            .for_each(|t| queue.push_back(Arc::new(Mutex::new(*t))));
+
         self.add_queue(queue).await;
         Ok(())
     }
@@ -233,13 +269,8 @@ where
         sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
         queues: Vec<Self::TaskQueueType>,
     ) -> Result<(), TaskManagerError> {
-        for (plan, queue) in sync_plans
-            .iter()
-            .zip(queues)
-        {
-            let result = self
-                .load_sync_plan(*plan, queue)
-                .await;
+        for (plan, queue) in sync_plans.iter().zip(queues) {
+            let result = self.load_sync_plan(*plan, queue).await;
             if let Err(e) = result {
                 error!("{:?}", e);
                 return Err(TaskManagerError::BatchPlanInsertionFailed(
@@ -491,7 +522,10 @@ where
                 let receive_result = failed_task_channel_lock.try_recv();
                 match receive_result {
                     Ok((_, failed_task)) => {
-                        let queues: tokio::sync::RwLockReadGuard<'_, HashMap<Uuid, Arc<Mutex<TQ>>>> = queues_ref.read().await;
+                        let queues: tokio::sync::RwLockReadGuard<
+                            '_,
+                            HashMap<Uuid, Arc<Mutex<TQ>>>,
+                        > = queues_ref.read().await;
                         let task_lock = failed_task.lock().await;
                         let q_key = task_lock.sync_plan_id().unwrap_or(Uuid::new_v4());
                         drop(task_lock);
@@ -535,7 +569,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::domain::synchronization::value_objects::task_spec::{RequestMethod, TaskSpecification};
+    use crate::domain::synchronization::value_objects::task_spec::{
+        RequestMethod, TaskSpecification,
+    };
     use log::{error, info};
 
     use super::*;

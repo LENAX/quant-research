@@ -60,7 +60,9 @@ impl TaskRequestMPMCReceiver for TokioBroadcastingMessageBusReceiver<GetTaskRequ
 }
 
 pub trait SyncTaskMPMCSender:
-    MessageBusSender<Arc<Mutex<SyncTask>>> + StaticAsyncComponent + BroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>
+    MessageBusSender<Arc<Mutex<SyncTask>>>
+    + StaticAsyncComponent
+    + BroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>
 {
 }
 

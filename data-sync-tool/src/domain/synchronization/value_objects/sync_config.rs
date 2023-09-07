@@ -1,7 +1,6 @@
 use derivative::Derivative;
 use getset::{Getters, Setters};
 
-
 #[derive(Derivative, Debug, Clone, Getters, Setters)]
 #[getset(get = "pub", set = "pub")]
 pub struct RateQuota {

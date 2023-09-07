@@ -1,10 +1,10 @@
-use std::{sync::Arc, collections::VecDeque, ops::RangeBounds};
+use std::{collections::VecDeque, ops::RangeBounds, sync::Arc};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::domain::synchronization::{sync_task::SyncTask, rate_limiter::RateLimiter};
+use crate::domain::synchronization::{rate_limiter::RateLimiter, sync_task::SyncTask};
 
 use super::errors::QueueError;
 
@@ -14,8 +14,7 @@ use super::errors::QueueError;
 
 #[async_trait]
 pub trait TaskQueue {
-    // type RateLimiterType;
-    // type TaskReceiverType;
+    type BuilderType;
 
     fn start_sending_tasks(&mut self);
     fn pause(&mut self);

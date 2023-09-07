@@ -6,8 +6,8 @@
  * The Builder traits for all builders
  */
 pub trait Builder {
-    type Item;
+    type Product;
 
     fn new() -> Self;
-    fn build(self) -> Self::Item;
+    fn build(self) -> Self::Product;
 }

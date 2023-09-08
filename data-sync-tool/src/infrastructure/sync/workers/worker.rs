@@ -11,7 +11,10 @@ use getset::{Getters, MutGetters, Setters};
 use log::{error, info};
 use reqwest::{Client, RequestBuilder};
 use serde_json::Value;
-use tokio::{time::{sleep, Duration}, sync::Mutex};
+use tokio::{
+    sync::Mutex,
+    time::{sleep, Duration},
+};
 use tungstenite::{connect, Message};
 use url::Url;
 use uuid::Uuid;
@@ -257,8 +260,7 @@ where
                 Ok(()) => {
                     info!(
                         "Successfully sent 1 finished task {} in worker {}!",
-                        task_id,
-                        self.id
+                        task_id, self.id
                     );
                     return Ok(());
                 }
@@ -273,7 +275,6 @@ where
             }
         }
 
-        
         error!("Task {} is discarded.", task_id);
         Err(SyncWorkerError::CompleteTaskSendFailed)
     }
@@ -303,7 +304,10 @@ where
         Err(SyncWorkerError::ResendTaskFailed)
     }
 
-    async fn handle_send_failed_task(&self, task: Arc<Mutex<SyncTask>>) -> Result<(), SyncWorkerError> {
+    async fn handle_send_failed_task(
+        &self,
+        task: Arc<Mutex<SyncTask>>,
+    ) -> Result<(), SyncWorkerError> {
         if let Err(_) = self.send_failed_task(task, Some(5)).await {
             error!(
                 "Skipped task because worker {} cannot send it back",
@@ -417,16 +421,14 @@ where
                             SyncWorkerError::NoDataReceived => {
                                 error!(
                                     "No data received while executing task {} in worker {}.",
-                                    task_id,
-                                    self.id
+                                    task_id, self.id
                                 );
                                 let _ = self.handle_send_failed_task(task).await;
                             }
                             SyncWorkerError::WebRequestFailed(reason) => {
                                 error!(
                                     "WebRequestFailed while executing task {} in worker {}.",
-                                    task_id,
-                                    self.id
+                                    task_id, self.id
                                 );
                                 let _ = self.handle_send_failed_task(task).await;
                             }
@@ -664,7 +666,10 @@ where
         }
     }
 
-    fn validate_task_spec(&mut self, sync_task: &Arc<Mutex<SyncTask>>) -> Result<(), SyncWorkerError> {
+    fn validate_task_spec(
+        &mut self,
+        sync_task: &Arc<Mutex<SyncTask>>,
+    ) -> Result<(), SyncWorkerError> {
         let task_lock = sync_task.blocking_lock();
         if *task_lock.spec().request_method() != RequestMethod::Websocket {
             self.wait();

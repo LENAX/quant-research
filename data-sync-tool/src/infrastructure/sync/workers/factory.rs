@@ -274,13 +274,13 @@ where
     CTS: SyncTaskMPMCSender,
     FTS: SyncTaskMPMCSender,
 {
-    type Item = WebAPISyncWorker<TRS, TTR, CTS, FTS>;
+    type Product = WebAPISyncWorker<TRS, TTR, CTS, FTS>;
 
     fn new() -> Self {
         WebAPISyncWorkerBuilder::new()
     }
 
-    fn build(self) -> Self::Item {
+    fn build(self) -> Self::Product {
         self.build()
     }
 }

@@ -1,8 +1,8 @@
 use async_trait::async_trait;
-use tokio::sync::Mutex;
 /// Task Executor Trait
 /// Defines the common interface for task execution
 use std::{collections::HashMap, sync::Arc};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::sync_plan::SyncPlan;
@@ -31,7 +31,10 @@ pub trait TaskExecutor: Sync + Send {
     type ShortRunningWorkerType;
 
     // add new sync plans to synchronize
-    async fn assign(&mut self, sync_plans: Vec<Arc<Mutex<SyncPlan>>>) -> Result<(), TaskExecutorError>;
+    async fn assign(
+        &mut self,
+        sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
+    ) -> Result<(), TaskExecutorError>;
 
     // run a single plan. Either start a new plan or continue a paused plan
     async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;

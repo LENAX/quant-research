@@ -49,142 +49,6 @@ use super::{
 //     );
 // }
 
-pub fn new_empty_limitless_queue<T: RateLimiter, TR: TaskRequestMPMCReceiver>(
-    max_retry: Option<u32>,
-    sync_plan_id: Uuid,
-    task_request_receiver: TR,
-) -> SyncTaskQueue<T, TR> {
-    return SyncTaskQueue::new(vec![], None, max_retry, sync_plan_id, task_request_receiver);
-}
-
-pub fn new_web_request_limiter(
-    max_request: u32,
-    max_daily_request: Option<u32>,
-    cooldown: Option<u32>,
-) -> WebRequestRateLimiter {
-    return WebRequestRateLimiter::new(max_request, max_daily_request, cooldown).unwrap();
-}
-
-pub fn create_rate_limiter(
-    create_limiter_req: &CreateRateLimiterRequest,
-    limiter_type: RateLimiterImpls,
-) -> Box<dyn RateLimiter> {
-    match limiter_type {
-        RateLimiterImpls::WebRequestRateLimiter => Box::new(new_web_request_limiter(
-            *create_limiter_req.max_request(),
-            *create_limiter_req.max_daily_request(),
-            *create_limiter_req.cooldown(),
-        )),
-        // handle other LimiterTypes here
-    }
-}
-
-pub enum RateLimiterInstance {
-    WebLimiter(WebRequestRateLimiter)
-}
-
-pub fn create_rate_limiter_by_rate_quota(
-    rate_quota: &RateQuota,
-) -> RateLimiterInstance {
-    match rate_quota.use_impl() {
-        RateLimiterImpls::WebRequestRateLimiter => RateLimiterInstance::WebLimiter(new_web_request_limiter(
-            *rate_quota.max_line_per_request(),
-            Some(*rate_quota.daily_limit()),
-            Some(*rate_quota.cooldown_seconds()),
-        )),
-        // handle other LimiterTypes here
-    }
-}
-
-
-/// Builders
-/// 1. SyncTaskQueueBuilder
-/// 2. TaskManagerBuilder
-pub struct SyncTaskQueueBuilder<T: RateLimiter, TR: TaskRequestMPMCReceiver> {
-    sync_plan_id: Option<Uuid>,
-    tasks: Option<VecDeque<Arc<Mutex<SyncTask>>>>,
-    task_request_receiver: Option<TR>,
-    rate_limiter: Option<T>,
-    max_retry: Option<u32>,
-    retries_left: Option<u32>,
-    status: Option<QueueStatus>,
-    initial_size: Option<usize>,
-}
-
-impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueueBuilder<T, TR> {
-    pub fn sync_plan_id(mut self, id: Uuid) -> Self {
-        self.sync_plan_id = Some(id);
-        self
-    }
-
-    pub fn tasks(mut self, tasks: VecDeque<Arc<Mutex<SyncTask>>>) -> Self {
-        self.tasks = Some(tasks);
-        self
-    }
-
-    pub fn task_request_receiver(mut self, receiver: TR) -> Self {
-        self.task_request_receiver = Some(receiver);
-        self
-    }
-
-    pub fn rate_limiter(mut self, limiter: T) -> Self {
-        self.rate_limiter = Some(limiter);
-        self
-    }
-
-    pub fn max_retry(mut self, retry: u32) -> Self {
-        self.max_retry = Some(retry);
-        self
-    }
-
-    pub fn retries_left(mut self, retries: u32) -> Self {
-        self.retries_left = Some(retries);
-        self
-    }
-
-    pub fn status(mut self, status: QueueStatus) -> Self {
-        self.status = Some(status);
-        self
-    }
-
-    pub fn initial_size(mut self, size: usize) -> Self {
-        self.initial_size = Some(size);
-        self
-    }
-}
-
-impl<T: RateLimiter, TR: TaskRequestMPMCReceiver> Builder for SyncTaskQueueBuilder<T, TR> {
-    type Item = SyncTaskQueue<T, TR>;
-
-    fn new() -> Self {
-        SyncTaskQueueBuilder {
-            sync_plan_id: None,
-            tasks: None,
-            task_request_receiver: None,
-            rate_limiter: None,
-            max_retry: None,
-            retries_left: None,
-            status: Some(QueueStatus::default()),
-            initial_size: None,
-        }
-    }
-
-    fn build(self) -> Self::Item {
-        SyncTaskQueue {
-            sync_plan_id: self.sync_plan_id.unwrap_or_else(Uuid::new_v4),
-            tasks: self.tasks.unwrap_or_else(VecDeque::new),
-            task_request_receiver: self
-                .task_request_receiver
-                .expect("Object implemented the TaskRequestMPMCReceiver trait is required"),
-            rate_limiter: self.rate_limiter,
-            max_retry: self.max_retry,
-            retries_left: self.retries_left,
-            status: self.status.unwrap_or(QueueStatus::default()),
-            initial_size: self.initial_size.unwrap_or(0),
-        }
-    }
-}
-
 pub struct TaskManagerBuilder<TQ, MT, ES, MF>
 where
     TQ: TaskQueue,
@@ -263,7 +127,7 @@ where
     ES: TaskManagerErrorMPSCSender,
     MF: FailedTaskSPMCReceiver,
 {
-    type Item = TaskManager<TQ, MT, ES, MF>;
+    type Product = TaskManager<TQ, MT, ES, MF>;
 
     fn new() -> Self {
         TaskManagerBuilder {
@@ -275,7 +139,7 @@ where
         }
     }
 
-    fn build(self) -> Self::Item {
+    fn build(self) -> Self::Product {
         TaskManager {
             queues: self.queues.expect("queues must be set"),
             task_sender: self.task_sender.expect("task_sender must be set"),

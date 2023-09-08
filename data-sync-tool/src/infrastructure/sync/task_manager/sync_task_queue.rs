@@ -17,7 +17,8 @@ use crate::{
 
 use super::{
     errors::{CooldownTimerTask, QueueError, TimeSecondLeft},
-    factory::SyncTaskQueueBuilder, task_queue::TaskQueue,
+    factory::SyncTaskQueueBuilder,
+    task_queue::TaskQueue,
 };
 
 use std::{collections::VecDeque, ops::RangeBounds, sync::Arc};

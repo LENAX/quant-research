@@ -1,3 +1,10 @@
+use crate::{
+    domain::synchronization::{
+        rate_limiter::{RateLimitStatus, RateLimiter},
+        sync_task::SyncTask,
+    },
+    infrastructure::sync::{factory::Builder, shared_traits::TaskRequestMPMCReceiver},
+};
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 /**
@@ -7,17 +14,9 @@ use tokio::sync::Mutex;
  */
 use uuid::Uuid;
 
-use crate::{
-    domain::synchronization::{
-        rate_limiter::{RateLimitStatus, RateLimiter},
-        sync_task::SyncTask,
-    },
-    infrastructure::sync::{factory::Builder, shared_traits::TaskRequestMPMCReceiver},
-};
-
 use super::{
     errors::{CooldownTimerTask, QueueError, TimeSecondLeft},
-    factory::SyncTaskQueueBuilder,
+    factory::task_queue::SyncTaskQueueBuilder,
     task_queue::TaskQueue,
 };
 
@@ -66,16 +65,15 @@ pub struct SyncTaskQueue<RL: RateLimiter, TR: TaskRequestMPMCReceiver> {
 
 impl<RL: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<RL, TR> {
     pub fn new(
-        tasks: Vec<Arc<Mutex<SyncTask>>>,
+        tasks: VecDeque<Arc<Mutex<SyncTask>>>,
         rate_limiter: Option<RL>,
         max_retry: Option<u32>,
         sync_plan_id: Uuid,
         task_request_receiver: TR,
     ) -> SyncTaskQueue<RL, TR> {
-        let task_queue = VecDeque::from(tasks);
-        let total_tasks = task_queue.len();
+        let total_tasks = tasks.len();
         SyncTaskQueue {
-            tasks: task_queue,
+            tasks,
             rate_limiter,
             max_retry,
             retries_left: max_retry,
@@ -93,6 +91,8 @@ impl<RL: RateLimiter, TR: TaskRequestMPMCReceiver> SyncTaskQueue<RL, TR> {
 
 #[async_trait]
 impl<RL: RateLimiter, TR: TaskRequestMPMCReceiver> TaskQueue for SyncTaskQueue<RL, TR> {
+    type BuilderType = SyncTaskQueueBuilder<RL, TR>;
+
     fn start_sending_tasks(&mut self) {
         self.status = QueueStatus::SendingTasks;
         info!("Queue {} has start sending tasks.", self.sync_plan_id);

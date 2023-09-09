@@ -98,9 +98,9 @@ impl StreamingData {
     ) -> Self {
         Self {
             sync_plan_id: plan_id,
-            task_id: task_id,
-            data: data,
-            received_time: received_time,
+            task_id,
+            data,
+            received_time,
         }
     }
 }

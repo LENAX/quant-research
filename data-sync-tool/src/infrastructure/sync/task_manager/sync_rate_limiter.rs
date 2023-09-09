@@ -27,7 +27,9 @@ use derivative::Derivative;
 use getset::{Getters, Setters};
 use log::{error, info};
 
-use super::factory::RateLimiterBuilder;
+use crate::infrastructure::sync::task_manager::factory::rate_limiter::RateLimiterBuilder;
+
+use super::factory::rate_limiter::WebRequestRateLimiterBuilder;
 
 // use super::factory::Builder;
 
@@ -85,6 +87,8 @@ pub struct WebRequestRateLimiter {
 
 #[async_trait]
 impl RateLimiter for WebRequestRateLimiter {
+    type BuilderType = WebRequestRateLimiterBuilder;
+
     async fn start_countdown(&mut self, reset_timer: bool) -> Result<JoinHandle<()>, TimerError> {
         // start a timer to count the time before allowing the next request
         // count down is started on these conditions, assuming the timer is not already running:

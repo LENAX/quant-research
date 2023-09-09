@@ -6,29 +6,28 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use derivative::Derivative;
 use getset::{Getters, Setters};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::domain::synchronization::rate_limiter::RateLimiter;
 use crate::domain::synchronization::sync_plan::SyncPlan;
-use crate::domain::synchronization::value_objects::sync_config::RateLimiterImpls;
 use crate::infrastructure::mq::message_bus::{
-    BroadcastingMessageBusReceiver, BroadcastingMessageBusSender, MessageBusReceiver,
-    MpscMessageBus, SpmcMessageBusReceiver, SpmcMessageBusSender, StaticAsyncComponent,
-    StaticClonableAsyncComponent, StaticClonableMpscMQ, StaticMpscMQReceiver,
+    MessageBusReceiver, MpscMessageBus, SpmcMessageBusReceiver, SpmcMessageBusSender,
+    StaticAsyncComponent, StaticClonableAsyncComponent, StaticClonableMpscMQ, StaticMpscMQReceiver,
 };
 use crate::infrastructure::mq::tokio_channel_mq::{
-    TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
     TokioMpscMessageBusReceiver, TokioMpscMessageBusSender, TokioSpmcMessageBusReceiver,
     TokioSpmcMessageBusSender,
 };
+use crate::infrastructure::sync::factory::Builder;
 use crate::infrastructure::sync::shared_traits::{FailedTask, TaskRequestMPMCReceiver};
-use crate::infrastructure::sync::GetTaskRequest;
 use crate::{
     domain::synchronization::sync_task::SyncTask, infrastructure::mq::message_bus::MessageBusSender,
 };
 
 use super::errors::TaskManagerError;
+use super::factory::rate_limiter::RateLimiterBuilder;
+use super::factory::task_queue::TaskQueueBuilder;
 use super::task_queue::TaskQueue;
 
 trait SyncTaskMpscSender: MessageBusSender<Arc<Mutex<SyncTask>>> + StaticClonableMpscMQ {}
@@ -128,16 +127,16 @@ pub trait SyncTaskManager: Sync + Send {
         &mut self,
     ) -> Result<HashMap<Uuid, Vec<Arc<Mutex<SyncTask>>>>, TaskManagerError>;
 
-    async fn new_empty_queue(
-        &self,
-        sync_plan: Arc<Mutex<SyncPlan>>,
-        task_request_receiver: TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
-    ) -> Self::TaskQueueType;
-    async fn new_empty_queues(
-        &self,
-        sync_plan: Arc<Mutex<SyncPlan>>,
-        task_request_receivers: Vec<impl TaskRequestMPMCReceiver>,
-    ) -> Self::TaskQueueType;
+    // async fn new_empty_queue(
+    //     &self,
+    //     sync_plan: Arc<RwLock<SyncPlan>>,
+    //     task_request_receiver: TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
+    // ) -> Self::TaskQueueType;
+    // async fn new_empty_queues(
+    //     &self,
+    //     sync_plan: Arc<RwLock<SyncPlan>>,
+    //     task_request_receivers: Vec<impl TaskRequestMPMCReceiver>,
+    // ) -> Self::TaskQueueType;
 
     // When need add new tasks ad hoc, use this method
     async fn add_tasks_to_plan(
@@ -147,17 +146,29 @@ pub trait SyncTaskManager: Sync + Send {
     ) -> Result<(), TaskManagerError>;
 
     // add new plans to sync
-    async fn load_sync_plan(
+    async fn load_sync_plan<RL: RateLimiter, TR: TaskRequestMPMCReceiver>(
         &mut self,
-        sync_plan: Arc<Mutex<SyncPlan>>,
-        queue: Self::TaskQueueType,
-    ) -> Result<(), TaskManagerError>;
+        sync_plan: Arc<RwLock<SyncPlan>>,
+        task_request_receiver: TR,
+    ) -> Result<(), TaskManagerError>
+    where
+        <RL as RateLimiter>::BuilderType: Builder<Product = RL> + RateLimiterBuilder + Send,
+        <Self::TaskQueueType as TaskQueue>::BuilderType: Builder<Product = Self::TaskQueueType>
+            + TaskQueueBuilder<RateLimiterType = RL, TaskRequestReceiverType = TR>
+            + Send,
+        <Self as SyncTaskManager>::TaskQueueType: TaskQueue;
 
-    async fn load_sync_plans(
+    async fn load_sync_plans<RL: RateLimiter, TR: TaskRequestMPMCReceiver>(
         &mut self,
-        sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
-        queues: Vec<Self::TaskQueueType>,
-    ) -> Result<(), TaskManagerError>;
+        sync_plans: Vec<Arc<RwLock<SyncPlan>>>,
+        task_request_receivers: Vec<TR>,
+    ) -> Result<(), TaskManagerError>
+    where
+        <RL as RateLimiter>::BuilderType: Builder<Product = RL> + RateLimiterBuilder + Send,
+        <Self::TaskQueueType as TaskQueue>::BuilderType: Builder<Product = Self::TaskQueueType>
+            + TaskQueueBuilder<RateLimiterType = RL, TaskRequestReceiverType = TR>
+            + Send,
+        <Self as SyncTaskManager>::TaskQueueType: TaskQueue;
 
     // stop syncing given the id, but it is resumable
     async fn stop_sending_task(&mut self, sync_plan_id: Uuid) -> Result<(), TaskManagerError>;

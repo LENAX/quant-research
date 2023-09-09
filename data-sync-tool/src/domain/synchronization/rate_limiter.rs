@@ -18,6 +18,8 @@ pub enum RateLimitStatus {
 
 #[async_trait]
 pub trait RateLimiter: Sync + Send {
+    type BuilderType;
+
     async fn can_proceed(&mut self) -> RateLimitStatus;
     async fn start_countdown(&mut self, reset_timer: bool) -> Result<JoinHandle<()>, TimerError>;
 }

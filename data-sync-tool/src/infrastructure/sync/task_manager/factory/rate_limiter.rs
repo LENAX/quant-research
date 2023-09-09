@@ -15,20 +15,21 @@ use crate::{
  * Rate Limiter Factory and Builders
  */
 
-pub fn create_rate_limiter<RLB: RateLimiterBuilder>(rate_quota: &RateQuota) -> RLB::Product
+pub fn create_rate_limiter<RLB: Builder + RateLimiterBuilder>(
+    rate_quota: &RateQuota,
+) -> RLB::Product
 where
     RLB::Product: RateLimiter,
 {
     let rate_limiter_builder = RLB::new();
     rate_limiter_builder
-        .default()
         .with_max_minute_request(*rate_quota.max_request_per_minute())
         .with_remaining_daily_requests(*rate_quota.daily_limit())
         .with_cooldown_seconds(*rate_quota.cooldown_seconds())
         .build()
 }
 
-pub trait RateLimiterBuilder: Builder {
+pub trait RateLimiterBuilder {
     fn with_max_minute_request(self, max_minute_request: u32) -> Self;
     fn with_remaining_daily_requests(self, remaining_munute_requests: u32) -> Self;
     fn with_cooldown_seconds(self, cooldown_seconds: u32) -> Self;
@@ -52,10 +53,10 @@ impl Default for WebRequestRateLimiterBuilder {
             id: Some(Uuid::new_v4()),
             max_minute_request: Some(60),
             remaining_minute_requests: Some(60),
-            remaining_daily_requests: todo!(),
-            cooldown_seconds: todo!(),
-            count_down: todo!(),
-            last_request_time: todo!(),
+            remaining_daily_requests: None,
+            cooldown_seconds: None,
+            count_down: None,
+            last_request_time: None,
         }
     }
 }
@@ -66,8 +67,8 @@ impl RateLimiterBuilder for WebRequestRateLimiterBuilder {
         self
     }
 
-    fn with_remaining_daily_requests(mut self, remaining: Option<u32>) -> Self {
-        self.remaining_daily_requests = remaining;
+    fn with_remaining_daily_requests(mut self, remaining: u32) -> Self {
+        self.remaining_daily_requests = Some(remaining);
         self
     }
 
@@ -81,28 +82,14 @@ impl Builder for WebRequestRateLimiterBuilder {
     type Product = WebRequestRateLimiter;
 
     fn new() -> Self {
-        WebRequestRateLimiterBuilder {
-            id: None,
-            max_minute_request: None,
-            remaining_minute_requests: None,
-            remaining_daily_requests: None,
-            cooldown_seconds: None,
-            count_down: None,
-            last_request_time: None,
-        }
+        Self::default()
     }
 
     fn build(self) -> Self::Product {
-        WebRequestRateLimiter {
-            id: self.id.unwrap_or_else(Uuid::new_v4),
-            max_minute_request: Arc::new(RwLock::new(self.max_minute_request.unwrap_or(60))),
-            remaining_minute_requests: Arc::new(Mutex::new(self.max_minute_request.unwrap_or(60))),
-            remaining_daily_requests: Arc::new(Mutex::new(Some(
-                self.remaining_daily_requests.unwrap_or(1000),
-            ))),
-            cooldown_seconds: Arc::new(RwLock::new(self.cooldown_seconds.unwrap_or(60))),
-            count_down: Arc::new(Mutex::new(self.count_down)),
-            last_request_time: Arc::new(Mutex::new(self.last_request_time)),
-        }
+        let limiter = WebRequestRateLimiter::new(
+            self.max_minute_request.unwrap_or(60), 
+            Some(self.remaining_daily_requests.unwrap_or(1000)),
+            Some(self.cooldown_seconds.unwrap_or(60))).expect("Fail to initialize rate limiter");
+        limiter
     }
 }

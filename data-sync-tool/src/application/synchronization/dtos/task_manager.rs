@@ -4,11 +4,8 @@ use getset::{Getters, Setters};
 use uuid::Uuid;
 
 use crate::{
-    domain::synchronization::value_objects::sync_config::RateQuota,
-    infrastructure::{
-        mq::factory::{MQType, SupportedMQImpl},
-        sync::sync_rate_limiter::RateLimiterImpls,
-    },
+    domain::synchronization::value_objects::sync_config::{RateQuota, RateLimiterImpls},
+    infrastructure::mq::factory::{MQType, SupportedMQImpl},
 };
 
 #[derive(Getters, Setters, Default, Clone)]

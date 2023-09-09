@@ -810,14 +810,15 @@ where
     async fn start_sync(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError> {
         self.start_working(*sync_plan_id);
 
-        let mut sync_task = self.request_task().await?;
-        let task_lock = sync_task.lock().await;
+        let sync_task = self.request_task().await?;
+        let mut task_lock = sync_task.lock().await;
         let request_url = task_lock.spec().request_endpoint();
         let task_id = *task_lock.id();
+        let msg_body = task_lock.spec().payload().clone();
         let mut connection = self.try_connect_ws_endpoint(request_url).await?;
         task_lock.start(Local::now());
         drop(task_lock);
-        let msg_body = task_lock.spec().payload();
+        
         if let Some(body) = msg_body {
             let text_msg = body.to_string();
             self.try_send_message(&mut connection, text_msg).await;

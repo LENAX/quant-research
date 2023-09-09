@@ -39,12 +39,12 @@ use crate::{
         },
         sync::{
             factory::Builder,
-            shared_traits::TaskRequestMPMCReceiver,
             task_manager::{
-                factory::{new_web_request_limiter, SyncTaskQueueBuilder},
+                factory::{rate_limiter::RateLimiterBuilder, task_queue::TaskQueueBuilder},
                 sync_rate_limiter::WebRequestRateLimiter,
                 sync_task_queue::SyncTaskQueue,
                 task_manager::TaskManager,
+                task_queue::TaskQueue,
                 tm_traits::SyncTaskManager,
             },
             workers::{
@@ -84,40 +84,22 @@ use uuid::Uuid;
 
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
-pub struct SyncTaskExecutor {
-    idle_long_running_workers: HashMap<
-        Uuid,
-        WebAPISyncWorker<
-            TokioMpscMessageBusSender<GetTaskRequest>,
-            TokioBroadcastingMessageBusReceiver<SyncTask>,
-            TokioBroadcastingMessageBusSender<SyncTask>,
-            TokioBroadcastingMessageBusSender<SyncTask>,
-        >,
-    >,
-    busy_long_running_workers:
-        HashMap<Uuid, WebsocketSyncWorker<TokioMpscMessageBusSender<GetTaskRequest>>>,
+pub struct SyncTaskExecutor<LW, SW, TM> {
+    idle_long_running_workers: HashMap<Uuid, LW>,
+    busy_long_running_workers: HashMap<Uuid, LW>,
     idle_short_task_handling_workers: HashMap<Uuid, SW>,
     busy_short_task_handling_workers: HashMap<Uuid, SW>,
-    task_manager: Arc<
-        Mutex<
-            TaskManager<
-                SyncTaskQueue<
-                    WebRequestRateLimiter,
-                    TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
-                >,
-                TokioBroadcastingMessageBusSender<Sync>,
-            >,
-        >,
-    >,
+    task_manager: Arc<Mutex<TM>>,
     // worker_channels: WorkerChannels,
     // task_manager_channels: TaskManagerChannels,
 }
 
-impl<LW, SW, TM> SyncTaskExecutor<LW, SW, TM>
+impl<LW, SW, TM, TQ> SyncTaskExecutor<LW, SW, TM>
 where
+    TQ: TaskQueue,
     LW: LongRunningWorker,
     SW: ShortRunningWorker,
-    TM: SyncTaskManager,
+    TM: SyncTaskManager<TaskQueueType = TQ>,
 {
     pub fn new() -> Self {
         todo!()
@@ -129,73 +111,44 @@ where
 }
 
 #[async_trait]
-impl<LW, SW, TM> TaskExecutor for SyncTaskExecutor<LW, SW, TM>
+impl<LW, SW, TM, TQ> TaskExecutor for SyncTaskExecutor<LW, SW, TM>
 where
+    TQ: TaskQueue,
     LW: LongRunningWorker,
     SW: ShortRunningWorker,
-    TM: SyncTaskManager,
+    TM: SyncTaskManager<TaskQueueType = TQ>,
 {
+    type TaskManagerType = TM;
+    type TaskQueueType = TQ;
+
     // add new sync plans to synchronize
     async fn assign(
         &mut self,
-        sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
-    ) -> Result<(), TaskExecutorError> {
-        let task_manager_lock = self.task_manager.lock().await;
+        sync_plans: Vec<Arc<RwLock<SyncPlan>>>,
+    ) -> Result<(), TaskExecutorError>
+    where
+        <WebRequestRateLimiter as RateLimiter>::BuilderType:
+            Builder<Product = WebRequestRateLimiter> + RateLimiterBuilder + Send,
+        <Self::TaskQueueType as TaskQueue>::BuilderType: Builder<Product = Self::TaskQueueType>
+            + TaskQueueBuilder<
+                RateLimiterType = WebRequestRateLimiter,
+                TaskRequestReceiverType = TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
+            > + Send,
+        <Self::TaskManagerType as SyncTaskManager>::TaskQueueType: TaskQueue,
+        <Self as TaskExecutor>::TaskManagerType: SyncTaskManager,
+        <Self as TaskExecutor>::TaskQueueType: TaskQueue,
+    {
         let (task_sender, task_receiver) = create_tokio_broadcasting_channel::<GetTaskRequest>(200);
-        let new_task_queues = sync_plans
-            .iter()
-            .map(|p| {
-                let plan_lock = p.blocking_lock();
-
-                let task_queue_builder: SyncTaskQueueBuilder<
-                    WebRequestRateLimiter,
-                    TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
-                > = SyncTaskQueueBuilder::new();
-
-                match plan_lock.sync_config().sync_rate_quota() {
-                    Some(quota) => {
-                        let rate_limiter = new_web_request_limiter(
-                            *quota.max_line_per_request(),
-                            Some(*quota.daily_limit()),
-                            Some(*quota.cooldown_seconds()),
-                        );
-                        let _task_queue = plan_lock
-                            .tasks()
-                            .iter()
-                            .map(|t| Arc::new(Mutex::new(t.clone())))
-                            .collect::<VecDeque<_>>();
-                        let new_task_queue = task_queue_builder
-                            .initial_size(plan_lock.tasks().len())
-                            .rate_limiter(rate_limiter)
-                            .retries_left(*quota.max_retry())
-                            .task_request_receiver(task_receiver.clone())
-                            .max_retry(*quota.max_retry())
-                            .sync_plan_id(*plan_lock.id())
-                            .tasks(_task_queue)
-                            .build();
-                        return new_task_queue;
-                    }
-                    None => {
-                        let _task_queue = plan_lock
-                            .tasks()
-                            .iter()
-                            .map(|t| Arc::new(Mutex::new(t.clone())))
-                            .collect::<VecDeque<_>>();
-                        let new_task_queue = task_queue_builder
-                            .initial_size(plan_lock.tasks().len())
-                            .retries_left(10)
-                            .task_request_receiver(task_receiver.clone())
-                            .max_retry(10)
-                            .sync_plan_id(*plan_lock.id())
-                            .tasks(_task_queue)
-                            .build();
-                        return new_task_queue;
-                    }
-                }
-            })
+        let task_receivers = (0..sync_plans.len())
+            .map(|_| task_receiver.clone())
             .collect::<Vec<_>>();
-        task_manager_lock.load_sync_plans(sync_plans, new_task_queues);
-        Ok(())
+
+        // Lock the task manager and load the sync plans
+        let mut task_manager_lock = self.task_manager.lock().await;
+        match task_manager_lock.load_sync_plans::<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>(sync_plans, task_receivers).await {
+            Ok(_) => Ok(()),
+            Err(e) => { Err(TaskExecutorError::LoadPlanFailure) }, // Convert the error type if needed
+        }
     }
 
     // run a single plan. Either start a new plan or continue a paused plan

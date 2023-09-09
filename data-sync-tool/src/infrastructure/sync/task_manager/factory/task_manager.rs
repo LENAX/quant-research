@@ -1,21 +1,25 @@
-use getset::{Getters, MutGetters, Setters};
-
+use crate::infrastructure::sync::task_manager::sync_task_queue::QueueId;
+use crate::infrastructure::sync::task_manager::task_manager::TaskManagerState;
 use crate::infrastructure::sync::{
     factory::Builder,
     shared_traits::{FailedTaskSPMCReceiver, SyncTaskMPMCSender},
     task_manager::{
+        task_manager::TaskManager,
         task_queue::TaskQueue,
         tm_traits::{SyncTaskManager, TaskManagerErrorMPSCSender},
     },
 };
-use std::sync::Arc;
-use tokio::sync::RwLock;
 /**
  * Task Manager Builders and Factories
  */
+use getset::{Getters, MutGetters, Setters};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 pub fn create_task_manager<
-    TMB: TMBuilder<TQ, MT, ES, MF>,
+    TMB: Builder + TMBuilder<TQ, MT, ES, MF>,
     TQ: TaskQueue,
     MT: SyncTaskMPMCSender,
     ES: TaskManagerErrorMPSCSender,
@@ -38,7 +42,7 @@ where
         .build()
 }
 
-pub trait TMBuilder<TQ, MT, ES, MF>: Builder
+pub trait TMBuilder<TQ, MT, ES, MF>
 where
     TQ: TaskQueue,
     MT: SyncTaskMPMCSender,
@@ -109,17 +113,13 @@ where
     }
 
     pub fn build(self) -> TaskManager<TQ, MT, ES, MF> {
-        TaskManager {
-            queues: self.queues.expect("queues must be set"),
-            task_sender: self.task_sender.expect("task_sender must be set"),
-            error_message_channel: self
-                .error_message_channel
-                .expect("error_message_channel must be set"),
-            failed_task_channel: self
-                .failed_task_channel
-                .expect("failed_task_channel must be set"),
-            current_state: self.current_state.expect("current_state must be set"),
-        }
+        TaskManager::new(
+            self.queues.expect("queues must be set"),
+            self.task_sender.expect("task_sender must be set"),
+            self.error_message_channel.expect("error_message_channel must be set"),
+            self.failed_task_channel
+                .expect("failed_task_channel must be set")
+        )
     }
 }
 
@@ -143,16 +143,15 @@ where
     }
 
     fn build(self) -> Self::Product {
-        TaskManager {
-            queues: self.queues.expect("queues must be set"),
-            task_sender: self.task_sender.expect("task_sender must be set"),
-            error_message_channel: self
+        TaskManager::new(
+            self.queues.expect("queues must be set"),
+            self.task_sender.expect("task_sender must be set"),
+            self
                 .error_message_channel
                 .expect("error_message_channel must be set"),
-            failed_task_channel: self
+            self
                 .failed_task_channel
                 .expect("failed_task_channel must be set"),
-            current_state: self.current_state.expect("current_state must be set"),
-        }
+        )
     }
 }

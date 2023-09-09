@@ -4,7 +4,7 @@
 use std::{collections::VecDeque, sync::Arc};
 
 use getset::{Getters, MutGetters, Setters};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::{
@@ -14,44 +14,52 @@ use crate::{
     infrastructure::sync::{
         factory::Builder,
         shared_traits::TaskRequestMPMCReceiver,
-        task_manager::sync_task_queue::{QueueStatus, SyncTaskQueue},
+        task_manager::{
+            sync_task_queue::{QueueStatus, SyncTaskQueue},
+            task_queue::TaskQueue,
+        },
     },
 };
 
-pub fn create_task_queue<
-    QB: TaskQueueBuilder<RL, TR>,
+pub async fn create_task_queue<
+    QB: Builder
+        + TaskQueueBuilder
+        + TaskQueueBuilder<RateLimiterType = RL, TaskRequestReceiverType = TR>,
     RL: RateLimiter,
     TR: TaskRequestMPMCReceiver,
 >(
-    sync_plan: Option<&SyncPlan>,
+    sync_plan_id: Uuid,
+    sync_plan: Option<Arc<RwLock<SyncPlan>>>,
     rate_limiter: Option<RL>,
     task_req_receiver: TR,
 ) -> QB::Product
 where
-    QB::Product: RateLimiter,
+    QB::Product: TaskQueue,
 {
     let mut builder = QB::new();
 
     // Always set task_request_receiver and status
-    builder = builder.with_task_request_receiver(task_req_receiver);
+    builder = builder
+        .with_task_request_receiver(task_req_receiver)
+        .with_sync_plan_id(sync_plan_id);
 
     if let Some(limiter) = rate_limiter {
         builder = builder.with_rate_limiter(limiter);
     }
 
     if let Some(plan) = sync_plan {
-        let tasks = plan
+        let plan_lock = plan.read().await;
+        let tasks = plan_lock
             .tasks()
             .iter()
             .map(|t| Arc::new(Mutex::new(t.clone())))
             .collect::<VecDeque<_>>();
 
         builder = builder
-            .with_sync_plan_id(*plan.id())
             .with_tasks(tasks)
-            .with_initial_size(plan.tasks().len());
+            .with_initial_size(plan_lock.tasks().len());
 
-        if let Some(q) = plan.sync_config().sync_rate_quota() {
+        if let Some(q) = plan_lock.sync_config().sync_rate_quota() {
             builder = builder.with_max_retry(*q.max_retry());
         }
     }
@@ -59,11 +67,14 @@ where
     builder.build()
 }
 
-pub trait TaskQueueBuilder<RL: RateLimiter, TR: TaskRequestMPMCReceiver>: Builder {
+pub trait TaskQueueBuilder {
+    type RateLimiterType;
+    type TaskRequestReceiverType;
+
     fn with_sync_plan_id(self, sync_plan_id: Uuid) -> Self;
     fn with_tasks(self, tasks: VecDeque<Arc<Mutex<SyncTask>>>) -> Self;
-    fn with_task_request_receiver(self, receiver: TR) -> Self;
-    fn with_rate_limiter(self, rate_limiter: RL) -> Self;
+    fn with_task_request_receiver(self, receiver: Self::TaskRequestReceiverType) -> Self;
+    fn with_rate_limiter(self, rate_limiter: Self::RateLimiterType) -> Self;
     fn with_max_retry(self, max_retry: u32) -> Self;
     fn with_retries_left(self, retries_left: u32) -> Self;
     fn with_status(self, status: QueueStatus) -> Self;
@@ -100,9 +111,12 @@ impl<RL: RateLimiter, TR: TaskRequestMPMCReceiver> Default for SyncTaskQueueBuil
     }
 }
 
-impl<RL: RateLimiter, TR: TaskRequestMPMCReceiver> TaskQueueBuilder<RL, TR>
+impl<RL: RateLimiter, TR: TaskRequestMPMCReceiver> TaskQueueBuilder
     for SyncTaskQueueBuilder<RL, TR>
 {
+    type RateLimiterType = RL;
+    type TaskRequestReceiverType = TR;
+
     fn with_sync_plan_id(mut self, sync_plan_id: Uuid) -> Self {
         self.sync_plan_id = Some(sync_plan_id);
         self
@@ -152,17 +166,14 @@ impl<RL: RateLimiter, TR: TaskRequestMPMCReceiver> Builder for SyncTaskQueueBuil
     }
 
     fn build(self) -> Self::Product {
-        SyncTaskQueue {
-            sync_plan_id: self.sync_plan_id.unwrap_or_else(Uuid::new_v4),
-            tasks: self.tasks.unwrap_or_else(VecDeque::new),
-            task_request_receiver: self
+        SyncTaskQueue::new(
+            self.tasks.unwrap_or_else(VecDeque::new), 
+            self.rate_limiter,
+            self.max_retry, 
+            self.sync_plan_id.expect("Plan id is required!"), 
+            self
                 .task_request_receiver
                 .expect("Object implemented the TaskRequestMPMCReceiver trait is required"),
-            rate_limiter: self.rate_limiter,
-            max_retry: self.max_retry,
-            retries_left: self.retries_left,
-            status: self.status.unwrap_or(QueueStatus::default()),
-            initial_size: self.initial_size.unwrap_or(0),
-        }
+        )
     }
 }

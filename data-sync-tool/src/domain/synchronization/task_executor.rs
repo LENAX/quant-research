@@ -2,13 +2,30 @@ use async_trait::async_trait;
 /// Task Executor Trait
 /// Defines the common interface for task execution
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
-use super::sync_plan::SyncPlan;
+use crate::infrastructure::{
+    mq::tokio_channel_mq::TokioBroadcastingMessageBusReceiver,
+    sync::{
+        factory::Builder,
+        task_manager::{
+            factory::{rate_limiter::RateLimiterBuilder, task_queue::TaskQueueBuilder},
+            sync_rate_limiter::WebRequestRateLimiter,
+            task_manager::TaskManager,
+            task_queue::TaskQueue,
+            tm_traits::SyncTaskManager,
+        },
+        GetTaskRequest,
+    },
+};
+
+use super::{rate_limiter::RateLimiter, sync_plan::SyncPlan};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TaskExecutorError {}
+pub enum TaskExecutorError {
+    LoadPlanFailure,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanProgress {
@@ -27,14 +44,24 @@ pub struct SyncProgress {
 #[async_trait]
 pub trait TaskExecutor: Sync + Send {
     type TaskManagerType;
-    type LongRunningWorkerType;
-    type ShortRunningWorkerType;
+    type TaskQueueType;
 
     // add new sync plans to synchronize
     async fn assign(
         &mut self,
-        sync_plans: Vec<Arc<Mutex<SyncPlan>>>,
-    ) -> Result<(), TaskExecutorError>;
+        sync_plans: Vec<Arc<RwLock<SyncPlan>>>,
+    ) -> Result<(), TaskExecutorError>
+    where
+        <WebRequestRateLimiter as RateLimiter>::BuilderType:
+            Builder<Product = WebRequestRateLimiter> + RateLimiterBuilder + Send,
+        <Self::TaskQueueType as TaskQueue>::BuilderType: Builder<Product = Self::TaskQueueType>
+            + TaskQueueBuilder<
+                RateLimiterType = WebRequestRateLimiter,
+                TaskRequestReceiverType = TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
+            > + Send,
+        <Self::TaskManagerType as SyncTaskManager>::TaskQueueType: TaskQueue,
+        <Self as TaskExecutor>::TaskManagerType: SyncTaskManager,
+        <Self as TaskExecutor>::TaskQueueType: TaskQueue;
 
     // run a single plan. Either start a new plan or continue a paused plan
     async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;

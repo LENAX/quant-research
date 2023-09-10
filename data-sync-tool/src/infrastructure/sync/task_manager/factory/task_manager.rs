@@ -33,8 +33,7 @@ pub fn create_task_manager<
 where
     TMB::Product: SyncTaskManager,
 {
-    let builder = TMB::new();
-    builder
+    TMB::new()
         .with_task_queues(task_queues)
         .with_task_sender(task_sender)
         .with_error_sender(error_sender)

@@ -1,14 +1,10 @@
-use crate::infrastructure::{
-    mq::message_bus::StaticClonableAsyncComponent,
-    sync::{
+use crate::infrastructure::sync::{
         factory::Builder,
         shared_traits::{
             StreamingDataMPMCSender, SyncTaskMPMCReceiver, SyncTaskMPMCSender,
             SyncWorkerErrorMPMCSender, TaskRequestMPMCSender,
         },
-        workers::worker_traits::SyncTaskStreamingDataMPSCSender,
-    },
-};
+    };
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Client, RequestBuilder,
@@ -17,15 +13,12 @@ use serde_json::Value;
 use std::{borrow::Borrow, collections::HashMap, str::FromStr, sync::Arc};
 use uuid::Uuid;
 
-use crate::{
-    domain::synchronization::value_objects::task_spec::RequestMethod,
-    infrastructure::mq::message_bus::StaticClonableMpscMQ,
-};
+use crate::domain::synchronization::value_objects::task_spec::RequestMethod;
 
 use super::{
     errors::RequestMethodNotSupported,
     worker::{WebAPISyncWorker, WebsocketSyncWorker, WorkerState},
-    worker_traits::{ShortRunningWorker, SyncWorkerErrorMessageMPSCSender},
+    worker_traits::ShortRunningWorker,
 };
 
 /**

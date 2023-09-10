@@ -108,6 +108,27 @@ where
     pub fn builder() -> Self {
         todo!()
     }
+
+    // for simplicity, use tokio channel
+    // may update to generic method to support multiple channel implementation
+    fn allocate_task_request_channels(
+        &self, 
+        n_sync_plans: usize, 
+        channel_size: Option<usize>
+    ) -> (Vec<TokioBroadcastingMessageBusSender<GetTaskRequest>>, Vec<TokioBroadcastingMessageBusReceiver<GetTaskRequest>>) {
+        let (task_sender, task_receiver) = create_tokio_broadcasting_channel::<GetTaskRequest>(channel_size.unwrap_or(200));
+        
+        let mut task_senders = Vec::with_capacity(n_sync_plans);
+        let mut task_receivers = Vec::with_capacity(n_sync_plans);
+        
+        for _ in 0..n_sync_plans {
+            task_senders.push(task_sender.clone());
+            task_receivers.push(task_receiver.clone());
+        }
+    
+        (task_senders, task_receivers)
+    }
+    
 }
 
 #[async_trait]
@@ -138,17 +159,17 @@ where
         <Self as TaskExecutor>::TaskManagerType: SyncTaskManager,
         <Self as TaskExecutor>::TaskQueueType: TaskQueue,
     {
-        let (task_sender, task_receiver) = create_tokio_broadcasting_channel::<GetTaskRequest>(200);
-        let task_receivers = (0..sync_plans.len())
-            .map(|_| task_receiver.clone())
-            .collect::<Vec<_>>();
-
+        let (
+            task_senders, 
+            task_receivers) = self.allocate_task_request_channels(sync_plans.len(), None);
         // Lock the task manager and load the sync plans
         let mut task_manager_lock = self.task_manager.lock().await;
         match task_manager_lock.load_sync_plans::<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>(sync_plans, task_receivers).await {
             Ok(_) => Ok(()),
             Err(e) => { Err(TaskExecutorError::LoadPlanFailure) }, // Convert the error type if needed
         }
+
+        // Allocate workers for each sync plan
     }
 
     // run a single plan. Either start a new plan or continue a paused plan

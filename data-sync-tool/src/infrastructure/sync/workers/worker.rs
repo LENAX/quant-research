@@ -35,7 +35,7 @@ use crate::{
 
 use super::{
     errors::SyncWorkerError,
-    factory::{build_headers, build_request, WebAPISyncWorkerBuilder},
+    factory_::{build_headers, build_request, WebAPISyncWorkerBuilder},
     worker_traits::{
         LongTaskHandlingWorker, ShortRunningWorker, ShortTaskHandlingWorker, SyncWorker,
     },
@@ -786,6 +786,8 @@ where
     SDS: StreamingDataMPMCSender,
     ES: SyncWorkerErrorMPMCSender,
 {
+    // type BuilderType = WebAPISyncWorkerBuilder<TRS, TTR, CTS, FTS>;
+
     fn pause(&mut self) -> Result<(), SyncWorkerError> {
         Ok(self.wait())
     }

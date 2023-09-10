@@ -27,7 +27,7 @@ use crate::{
         rate_limiter::RateLimiter,
         sync_plan::SyncPlan,
         sync_task::SyncTask,
-        task_executor::{SyncProgress, TaskExecutor, TaskExecutorError},
+        task_executor::{SyncProgress, TaskExecutor, TaskExecutorError}, value_objects::sync_config::SyncMode,
     },
     infrastructure::{
         mq::{
@@ -49,7 +49,7 @@ use crate::{
             },
             workers::{
                 worker::{WebAPISyncWorker, WebsocketSyncWorker},
-                worker_traits::{LongRunningWorker, ShortRunningWorker},
+                worker_traits::{LongRunningWorker, ShortRunningWorker}, factory::{http_worker_factory::create_http_worker, websocket_worker_factory::create_websocket_worker},
             },
             GetTaskRequest,
         },
@@ -164,6 +164,22 @@ where
             task_receivers) = self.allocate_task_request_channels(sync_plans.len(), None);
         // Lock the task manager and load the sync plans
         let mut task_manager_lock = self.task_manager.lock().await;
+        
+        for sync_plan in sync_plans {
+            let plan_lock = sync_plan.read().await;
+            match plan_lock.sync_config().sync_mode() {
+                SyncMode::HttpAPI => {
+                    // Fixme: fill the correct type
+                    let http_worker = create_http_worker(task_request_sender, todo_task_receiver, completed_task_sender, failed_task_sender);
+                    self.idle_short_task_handling_workers.insert(*http_worker.id(), http_worker);
+                },
+                SyncMode::WebsocketStreaming => {
+                    let websocket_worker = create_websocket_worker(task_request_sender, todo_task_receiver, completed_task_sender, failed_task_sender);
+                    self.idle_long_running_workers.insert(*websocket_worker.id(), websocket_worker);
+                }
+            }
+        }
+
         match task_manager_lock.load_sync_plans::<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>(sync_plans, task_receivers).await {
             Ok(_) => Ok(()),
             Err(e) => { Err(TaskExecutorError::LoadPlanFailure) }, // Convert the error type if needed

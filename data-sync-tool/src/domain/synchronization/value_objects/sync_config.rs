@@ -21,8 +21,18 @@ pub enum RateLimiterImpls {
     WebRequestRateLimiter,
 }
 
+#[derive(Derivative)]
+#[derivative(Default(bound = ""))]
+#[derive(Debug, Clone, Copy)]
+pub enum SyncMode {
+    #[derivative(Default)]
+    HttpAPI,
+    WebsocketStreaming
+}
+
 #[derive(Derivative, Debug, Clone, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncConfig {
     sync_rate_quota: Option<RateQuota>,
+    sync_mode: SyncMode
 }

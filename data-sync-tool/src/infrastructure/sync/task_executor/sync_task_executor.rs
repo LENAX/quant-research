@@ -27,19 +27,22 @@ use crate::{
         rate_limiter::RateLimiter,
         sync_plan::SyncPlan,
         sync_task::SyncTask,
-        task_executor::{SyncProgress, TaskExecutor, TaskExecutorError}, value_objects::sync_config::SyncMode,
+        task_executor::{SyncProgress, TaskExecutor, TaskExecutorError},
+        value_objects::sync_config::SyncMode,
     },
     infrastructure::{
         mq::{
             factory::create_tokio_broadcasting_channel,
             tokio_channel_mq::{
                 TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
-                TokioMpscMessageBusSender,
+                TokioMpscMessageBusSender, TokioSpmcMessageBusReceiver,
             },
         },
         sync::{
             factory::Builder,
+            shared_traits::StreamingData,
             task_manager::{
+                errors::TaskManagerError,
                 factory::{rate_limiter::RateLimiterBuilder, task_queue::TaskQueueBuilder},
                 sync_rate_limiter::WebRequestRateLimiter,
                 sync_task_queue::SyncTaskQueue,
@@ -48,8 +51,14 @@ use crate::{
                 tm_traits::SyncTaskManager,
             },
             workers::{
-                worker::{WebAPISyncWorker, WebsocketSyncWorker},
-                worker_traits::{LongRunningWorker, ShortRunningWorker}, factory::{http_worker_factory::create_http_worker, websocket_worker_factory::create_websocket_worker},
+                errors::SyncWorkerError,
+                factory::{
+                    http_worker_factory::{create_http_worker, WebAPISyncWorkerBuilder},
+                    websocket_worker_factory::{create_websocket_worker, WebsocketSyncWorkerBuilder},
+                },
+                http_worker::WebAPISyncWorker,
+                websocket_worker::{self, WebsocketSyncWorker},
+                worker_traits::{LongRunningWorker, ShortRunningWorker},
             },
             GetTaskRequest,
         },
@@ -84,23 +93,41 @@ use uuid::Uuid;
 
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
-pub struct SyncTaskExecutor<LW, SW, TM> {
-    idle_long_running_workers: HashMap<Uuid, LW>,
-    busy_long_running_workers: HashMap<Uuid, LW>,
-    idle_short_task_handling_workers: HashMap<Uuid, SW>,
-    busy_short_task_handling_workers: HashMap<Uuid, SW>,
-    task_manager: Arc<Mutex<TM>>,
-    // worker_channels: WorkerChannels,
-    // task_manager_channels: TaskManagerChannels,
+pub struct SyncTaskExecutor {
+    http_api_sync_workers: HashMap<
+        Uuid,
+        WebAPISyncWorker<
+            TokioBroadcastingMessageBusSender<GetTaskRequest>,
+            TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
+            TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
+            TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
+        >,
+    >,
+    websocket_streaming_workers: HashMap<
+        Uuid,
+        WebsocketSyncWorker<
+            TokioBroadcastingMessageBusSender<GetTaskRequest>,
+            TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
+            TokioBroadcastingMessageBusSender<StreamingData>,
+            TokioBroadcastingMessageBusSender<SyncWorkerError>,
+        >,
+    >,
+    task_manager: Arc<
+        Mutex<
+            TaskManager<
+                SyncTaskQueue<
+                    WebRequestRateLimiter,
+                    TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
+                >,
+                TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
+                TokioMpscMessageBusSender<TaskManagerError>,
+                TokioSpmcMessageBusReceiver<(Uuid, Arc<Mutex<SyncTask>>)>,
+            >,
+        >,
+    >,
 }
 
-impl<LW, SW, TM, TQ> SyncTaskExecutor<LW, SW, TM>
-where
-    TQ: TaskQueue,
-    LW: LongRunningWorker,
-    SW: ShortRunningWorker,
-    TM: SyncTaskManager<TaskQueueType = TQ>,
-{
+impl SyncTaskExecutor {
     pub fn new() -> Self {
         todo!()
     }
@@ -112,35 +139,38 @@ where
     // for simplicity, use tokio channel
     // may update to generic method to support multiple channel implementation
     fn allocate_task_request_channels(
-        &self, 
-        n_sync_plans: usize, 
-        channel_size: Option<usize>
-    ) -> (Vec<TokioBroadcastingMessageBusSender<GetTaskRequest>>, Vec<TokioBroadcastingMessageBusReceiver<GetTaskRequest>>) {
-        let (task_sender, task_receiver) = create_tokio_broadcasting_channel::<GetTaskRequest>(channel_size.unwrap_or(200));
-        
+        &self,
+        n_sync_plans: usize,
+        channel_size: Option<usize>,
+    ) -> (
+        Vec<TokioBroadcastingMessageBusSender<GetTaskRequest>>,
+        Vec<TokioBroadcastingMessageBusReceiver<GetTaskRequest>>,
+    ) {
+        let (task_sender, task_receiver) =
+            create_tokio_broadcasting_channel::<GetTaskRequest>(channel_size.unwrap_or(200));
+
         let mut task_senders = Vec::with_capacity(n_sync_plans);
         let mut task_receivers = Vec::with_capacity(n_sync_plans);
-        
+
         for _ in 0..n_sync_plans {
             task_senders.push(task_sender.clone());
             task_receivers.push(task_receiver.clone());
         }
-    
+
         (task_senders, task_receivers)
     }
-    
 }
 
 #[async_trait]
-impl<LW, SW, TM, TQ> TaskExecutor for SyncTaskExecutor<LW, SW, TM>
-where
-    TQ: TaskQueue,
-    LW: LongRunningWorker,
-    SW: ShortRunningWorker,
-    TM: SyncTaskManager<TaskQueueType = TQ>,
-{
-    type TaskManagerType = TM;
-    type TaskQueueType = TQ;
+impl TaskExecutor for SyncTaskExecutor {
+    type TaskManagerType = TaskManager<
+        SyncTaskQueue<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>,
+        TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
+        TokioMpscMessageBusSender<TaskManagerError>,
+        TokioSpmcMessageBusReceiver<(Uuid, Arc<Mutex<SyncTask>>)>,
+    >;
+    type TaskQueueType =
+        SyncTaskQueue<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>;
 
     // add new sync plans to synchronize
     async fn assign(
@@ -159,23 +189,74 @@ where
         <Self as TaskExecutor>::TaskManagerType: SyncTaskManager,
         <Self as TaskExecutor>::TaskQueueType: TaskQueue,
     {
-        let (
-            task_senders, 
-            task_receivers) = self.allocate_task_request_channels(sync_plans.len(), None);
+        let (task_senders, task_receivers) =
+            self.allocate_task_request_channels(sync_plans.len(), None);
         // Lock the task manager and load the sync plans
         let mut task_manager_lock = self.task_manager.lock().await;
-        
-        for sync_plan in sync_plans {
+
+        for (i, sync_plan) in sync_plans.iter().enumerate() {
+            // let (task_sender, task_receiver) =
+            //     create_tokio_broadcasting_channel::<GetTaskRequest>(200);
+            let (todo_task_sender, todo_task_receiver) =
+                create_tokio_broadcasting_channel::<Arc<Mutex<SyncTask>>>(200);
+            let (completed_task_sender, completed_task_receiver) =
+                create_tokio_broadcasting_channel::<Arc<Mutex<SyncTask>>>(200);
+            let (failed_task_sender, failed_task_receiver) =
+                create_tokio_broadcasting_channel::<Arc<Mutex<SyncTask>>>(200);
+
             let plan_lock = sync_plan.read().await;
             match plan_lock.sync_config().sync_mode() {
                 SyncMode::HttpAPI => {
                     // Fixme: fill the correct type
-                    let http_worker = create_http_worker(task_request_sender, todo_task_receiver, completed_task_sender, failed_task_sender);
-                    self.idle_short_task_handling_workers.insert(*http_worker.id(), http_worker);
-                },
+                    let http_worker: WebAPISyncWorker<
+                        TokioBroadcastingMessageBusSender<GetTaskRequest>,
+                        TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
+                        TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
+                        TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
+                    > = create_http_worker::<
+                        WebAPISyncWorkerBuilder<
+                            TokioBroadcastingMessageBusSender<GetTaskRequest>,
+                            TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
+                            TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
+                            TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
+                        >,
+                        TokioBroadcastingMessageBusSender<GetTaskRequest>,
+                        TokioBroadcastingMessageBusReceiver<Arc<tokio::sync::Mutex<SyncTask>>>,
+                        TokioBroadcastingMessageBusSender<Arc<tokio::sync::Mutex<SyncTask>>>,
+                        TokioBroadcastingMessageBusSender<Arc<tokio::sync::Mutex<SyncTask>>>,
+                    >(
+                        task_senders[i],
+                        todo_task_receiver,
+                        completed_task_sender,
+                        failed_task_sender,
+                    );
+                    self.http_api_sync_workers
+                        .insert(*http_worker.id(), http_worker);
+                }
                 SyncMode::WebsocketStreaming => {
-                    let websocket_worker = create_websocket_worker(task_request_sender, todo_task_receiver, completed_task_sender, failed_task_sender);
-                    self.idle_long_running_workers.insert(*websocket_worker.id(), websocket_worker);
+                    let websocket_worker: WebsocketSyncWorker<
+                        TokioBroadcastingMessageBusSender<GetTaskRequest>,
+                        TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
+                        TokioBroadcastingMessageBusSender<StreamingData>,
+                        TokioBroadcastingMessageBusSender<SyncWorkerError>,
+                    > = create_websocket_worker::<
+                        WebsocketSyncWorkerBuilder<
+                            TokioBroadcastingMessageBusSender<GetTaskRequest>,
+                            TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
+                            TokioBroadcastingMessageBusSender<StreamingData>,
+                            TokioBroadcastingMessageBusSender<SyncWorkerError>>,
+                        TokioBroadcastingMessageBusSender<GetTaskRequest>,
+                        TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
+                        TokioBroadcastingMessageBusSender<StreamingData>,
+                        TokioBroadcastingMessageBusSender<SyncWorkerError>,
+                    >(
+                        task_senders[i],
+                        todo_task_receiver,
+                        completed_task_sender,
+                        failed_task_sender,
+                    );
+                    self.websocket_streaming_workers
+                        .insert(*websocket_worker.id(), websocket_worker);
                 }
             }
         }

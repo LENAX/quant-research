@@ -149,7 +149,7 @@ impl SyncWorkerErrorMPMCReceiver for TokioBroadcastingMessageBusReceiver<SyncWor
 
 /// FailedTaskSPMCReceiver and FailedTaskSPMCReceiver
 /// Single Producer Multiple Receiver channel trait for sending back failed task to retry
-pub type FailedTask = (Uuid, Arc<Mutex<SyncTask>>);
+pub type FailedTask = Arc<Mutex<SyncTask>>;
 pub trait FailedTaskSPMCReceiver:
     MessageBusReceiver<FailedTask> + StaticAsyncComponent + SpmcMessageBusReceiver
 {

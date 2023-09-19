@@ -16,11 +16,11 @@ use crate::infrastructure::{
             task_queue::TaskQueue,
             tm_traits::SyncTaskManager,
         },
-        GetTaskRequest,
+        GetTaskRequest, shared_traits::StreamingData, workers::errors::SyncWorkerError,
     },
 };
 
-use super::{rate_limiter::RateLimiter, sync_plan::SyncPlan};
+use super::{rate_limiter::RateLimiter, sync_plan::SyncPlan, sync_task::SyncTask};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskExecutorError {
@@ -62,6 +62,16 @@ pub trait TaskExecutor: Sync + Send {
         <Self::TaskManagerType as SyncTaskManager>::TaskQueueType: TaskQueue,
         <Self as TaskExecutor>::TaskManagerType: SyncTaskManager,
         <Self as TaskExecutor>::TaskQueueType: TaskQueue;
+
+    // wait and continuously get completed task
+    async fn wait_and_get_completed_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, TaskExecutorError>;
+
+    // wait and continuously get streaming data
+    async fn wait_and_get_streaming_data(&mut self) -> Result<StreamingData, TaskExecutorError>;
+
+    async fn wait_and_get_failed_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, TaskExecutorError>;
+
+    async fn wait_and_get_worker_error(&mut self) -> Result<SyncWorkerError, TaskExecutorError>;
 
     // run a single plan. Either start a new plan or continue a paused plan
     async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;

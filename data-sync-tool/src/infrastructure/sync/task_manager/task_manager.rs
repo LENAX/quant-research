@@ -506,7 +506,7 @@ where
                 let mut failed_task_channel_lock = failed_task_channel.lock().await;
                 let receive_result = failed_task_channel_lock.try_recv();
                 match receive_result {
-                    Ok((_, failed_task)) => {
+                    Ok(failed_task) => {
                         let queues: tokio::sync::RwLockReadGuard<
                             '_,
                             HashMap<Uuid, Arc<Mutex<TQ>>>,

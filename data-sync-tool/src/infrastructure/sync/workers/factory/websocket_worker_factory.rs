@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 use crate::infrastructure::sync::{
     factory::Builder,
-    shared_traits::{SyncTaskMPMCReceiver, SyncTaskMPMCSender, TaskRequestMPMCSender},
+    shared_traits::{SyncTaskMPMCReceiver, SyncTaskMPMCSender, TaskRequestMPMCSender, StreamingDataMPMCSender, SyncWorkerErrorMPMCSender},
     workers::{
         websocket_worker::WebsocketSyncWorker,
         worker_traits::{SyncWorker, WorkerState},
@@ -24,9 +24,9 @@ pub fn create_websocket_worker<
     // TTR is a type that represents a receiver for tasks that need to be done.
     TTR: SyncTaskMPMCReceiver,
     // SDS is a type that represents a sender for data received from a remote source.
-    SDS: SyncTaskMPMCSender,
+    SDS: StreamingDataMPMCSender,
     // ES is a type that represents a sender for error messages.
-    ES: SyncTaskMPMCSender,
+    ES: SyncWorkerErrorMPMCSender,
 >(
     task_request_sender: TRS, // Sender for task requests.
     todo_task_receiver: TTR,  // Receiver for tasks that need to be done.
@@ -99,7 +99,16 @@ impl<TRS, TTR, SDS, ES> WebsocketWorkerBuilder<TRS, TTR, SDS, ES>
     }
 }
 
-impl<TRS, TTR, SDS, ES> Builder for WebsocketSyncWorkerBuilder<TRS, TTR, SDS, ES> {
+impl<TRS, TTR, SDS, ES> Builder for WebsocketSyncWorkerBuilder<TRS, TTR, SDS, ES>
+where
+    TRS: TaskRequestMPMCSender,
+    // TTR is a type that represents a receiver for tasks that need to be done.
+    TTR: SyncTaskMPMCReceiver,
+    // SDS is a type that represents a sender for data received from a remote source.
+    SDS: StreamingDataMPMCSender,
+    // ES is a type that represents a sender for error messages.
+    ES: SyncWorkerErrorMPMCSender,
+{
     type Product = WebsocketSyncWorker<TRS, TTR, SDS, ES>;
 
     fn new() -> Self {
@@ -115,14 +124,19 @@ impl<TRS, TTR, SDS, ES> Builder for WebsocketSyncWorkerBuilder<TRS, TTR, SDS, ES
     }
 
     fn build(self) -> Self::Product {
-        WebsocketSyncWorker {
-            id: self.id.expect("ID must be set"),
-            state: self.state.expect("WorkerState must be set"),
-            task_request_sender: self.task_request_sender,
-            todo_task_receiver: self.todo_task_receiver,
-            data_sender: self.data_sender,
-            error_sender: self.error_sender,
-            assigned_sync_plan_id: self.assigned_sync_plan_id,
-        }
+        // WebsocketSyncWorker {
+        //     id: self.id.expect("ID must be set"),
+        //     state: self.state.expect("WorkerState must be set"),
+        //     task_request_sender: self.task_request_sender,
+        //     todo_task_receiver: self.todo_task_receiver,
+        //     data_sender: self.data_sender,
+        //     error_sender: self.error_sender,
+        //     assigned_sync_plan_id: self.assigned_sync_plan_id,
+        // }
+        WebsocketSyncWorker::new(
+            self.task_request_sender.expect("Task request sender is required"),
+            self.todo_task_receiver.expect("Task request sender is required"),
+            self.data_sender.expect("Task request sender is required"),
+            self.error_sender.expect("Task request sender is required"))
     }
 }

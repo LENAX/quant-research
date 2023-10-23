@@ -357,8 +357,12 @@ where
 {
     type BuilderType = WebAPISyncWorkerBuilder<TRS, TTR, CTS, FTS>;
 
-    async fn start_sync(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError> {
-        self.start_working(*sync_plan_id);
+    async fn start_sync(&mut self) -> Result<(), SyncWorkerError> {
+        if self.assigned_sync_plan_id.is_none() {
+            return Err(SyncWorkerError::NoPlanAssigned(format!("Worker {} has no assigned sync plan", self.id)));
+        }
+
+        self.start_working(self.assigned_sync_plan_id.expect("Assigned sync plan id should not be empty"));
 
         while self.is_busy() {
             // request a task
@@ -448,7 +452,7 @@ where
         Ok(self.stop())
     }
 
-    fn reassign_sync_plan(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError> {
+    fn assign_sync_plan(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError> {
         if self.is_busy() {
             self.stop();
         }

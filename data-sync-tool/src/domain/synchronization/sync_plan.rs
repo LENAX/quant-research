@@ -4,7 +4,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use super::{
-    custom_errors::TaskCreationError, sync_task::SyncTask, value_objects::sync_config::SyncConfig,
+    custom_errors::TaskCreationError, sync_task::SyncTask, value_objects::sync_config::{SyncConfig, SyncMode},
     value_objects::task_spec::RequestMethod,
 };
 use chrono::prelude::*;
@@ -75,7 +75,9 @@ impl SyncPlan {
         dataset_id: Option<Uuid>,
         dataset_name: &str,
         param_template_id: Option<Uuid>,
-        sync_config: SyncConfig,
+        sync_config: SyncCSyncMode {
+            return self.sync_config.sync_mode()
+        }onfig,
     ) -> SyncPlan {
         SyncPlan {
             id: Uuid::new_v4(),
@@ -137,5 +139,9 @@ impl SyncPlan {
         }
 
         return Ok(self);
+    }
+
+    pub fn sync_mode(&self) -> &SyncMode {
+        return self.sync_config.sync_mode()
     }
 }

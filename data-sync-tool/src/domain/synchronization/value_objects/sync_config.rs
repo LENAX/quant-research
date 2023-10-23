@@ -9,17 +9,9 @@ pub struct RateQuota {
     daily_limit: u32,
     cooldown_seconds: u32,
     max_concurrent_task: u32,
-    use_impl: RateLimiterImpls,
     max_retry: u32,
 }
 
-#[derive(Derivative)]
-#[derivative(Default(bound = ""))]
-#[derive(Debug, Clone, Copy)]
-pub enum RateLimiterImpls {
-    #[derivative(Default)]
-    WebRequestRateLimiter,
-}
 
 #[derive(Derivative)]
 #[derivative(Default(bound = ""))]

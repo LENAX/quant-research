@@ -30,6 +30,7 @@ pub enum SyncWorkerError {
     ConnectionDroppedTimeout,
     OtherError(String),
     WorkerStopped,
+    NoPlanAssigned(String),
     NoTaskAssigned,
     NoTaskReceived,
     SendTaskRequestFailed(String),

@@ -64,14 +64,14 @@ pub trait TaskExecutor: Sync + Send {
         <Self as TaskExecutor>::TaskQueueType: TaskQueue;
 
     // wait and continuously get completed task
-    async fn wait_and_get_completed_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, TaskExecutorError>;
+    async fn subscribe_completed_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, TaskExecutorError>;
 
     // wait and continuously get streaming data
-    async fn wait_and_get_streaming_data(&mut self) -> Result<StreamingData, TaskExecutorError>;
+    async fn subscribe_streaming_data(&mut self) -> Result<StreamingData, TaskExecutorError>;
 
-    async fn wait_and_get_failed_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, TaskExecutorError>;
+    async fn subscribe_failed_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, TaskExecutorError>;
 
-    async fn wait_and_get_worker_error(&mut self) -> Result<SyncWorkerError, TaskExecutorError>;
+    async fn subscribe_worker_error(&mut self) -> Result<SyncWorkerError, TaskExecutorError>;
 
     // run a single plan. Either start a new plan or continue a paused plan
     async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;

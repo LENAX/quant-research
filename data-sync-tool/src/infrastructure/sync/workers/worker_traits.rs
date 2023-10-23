@@ -43,10 +43,10 @@ pub trait SyncWorker: Send + Sync {
     // handles sync task, then updates its states and result
     // async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<&mut SyncTask, Box<dyn Error>>;
     // async fn handle(&mut self, sync_task: &mut SyncTask) -> Result<(), SyncWorkerError>;
-    async fn start_sync(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError>;
+    async fn start_sync(&mut self) -> Result<(), SyncWorkerError>;
     fn pause(&mut self) -> Result<(), SyncWorkerError>;
     fn stop(&mut self) -> Result<(), SyncWorkerError>;
-    fn reassign_sync_plan(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError>;
+    fn assign_sync_plan(&mut self, sync_plan_id: &Uuid) -> Result<(), SyncWorkerError>;
     fn current_state(&self) -> WorkerState;
 }
 

@@ -43,35 +43,39 @@ pub struct SyncProgress {
 
 #[async_trait]
 pub trait TaskExecutor: Sync + Send {
-    type TaskManagerType;
-    type TaskQueueType;
+    type TaskManagerType: SyncTaskManager;
+    type TaskQueueType: TaskQueue;
+
+    // Move the common bounds to associated types to declutter the method signature
+    type RateLimiter: RateLimiter;
+    type RateLimiterBuilder: Builder<Product = Self::RateLimiter> + RateLimiterBuilder + Send;
+
+    type QueueBuilder: Builder<Product = Self::TaskQueueType> 
+        + TaskQueueBuilder<
+            RateLimiterType = Self::RateLimiter,
+            TaskRequestReceiverType = TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
+        > + Send;
+
+    type CompletedTaskChannelType;
+    type StreamingDataChannelType;
+    type FailedTaskChannelType;
+    type WorkerErrorChannelType;
 
     // add new sync plans to synchronize
     async fn assign(
         &mut self,
         sync_plans: Vec<Arc<RwLock<SyncPlan>>>,
-    ) -> Result<(), TaskExecutorError>
-    where
-        <WebRequestRateLimiter as RateLimiter>::BuilderType:
-            Builder<Product = WebRequestRateLimiter> + RateLimiterBuilder + Send,
-        <Self::TaskQueueType as TaskQueue>::BuilderType: Builder<Product = Self::TaskQueueType>
-            + TaskQueueBuilder<
-                RateLimiterType = WebRequestRateLimiter,
-                TaskRequestReceiverType = TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
-            > + Send,
-        <Self::TaskManagerType as SyncTaskManager>::TaskQueueType: TaskQueue,
-        <Self as TaskExecutor>::TaskManagerType: SyncTaskManager,
-        <Self as TaskExecutor>::TaskQueueType: TaskQueue;
+    ) -> Result<(), TaskExecutorError>;
 
     // wait and continuously get completed task
-    async fn subscribe_completed_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, TaskExecutorError>;
+    async fn subscribe_completed_task(&mut self) -> Self::CompletedTaskChannelType;
 
     // wait and continuously get streaming data
-    async fn subscribe_streaming_data(&mut self) -> Result<StreamingData, TaskExecutorError>;
+    async fn subscribe_streaming_data(&mut self) -> Self::StreamingDataChannelType;
 
-    async fn subscribe_failed_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, TaskExecutorError>;
+    async fn subscribe_failed_task(&mut self) -> Self::FailedTaskChannelType;
 
-    async fn subscribe_worker_error(&mut self) -> Result<SyncWorkerError, TaskExecutorError>;
+    async fn subscribe_worker_error(&mut self) -> Self::WorkerErrorChannelType;
 
     // run a single plan. Either start a new plan or continue a paused plan
     async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;

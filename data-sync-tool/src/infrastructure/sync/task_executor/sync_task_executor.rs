@@ -43,7 +43,7 @@ use crate::{
             shared_traits::StreamingData,
             task_manager::{
                 errors::TaskManagerError,
-                factory::{rate_limiter::RateLimiterBuilder, task_queue::TaskQueueBuilder},
+                factory::{rate_limiter::{RateLimiterBuilder, WebRequestRateLimiterBuilder}, task_queue::{TaskQueueBuilder, SyncTaskQueueBuilder}},
                 sync_rate_limiter::WebRequestRateLimiter,
                 sync_task_queue::SyncTaskQueue,
                 task_manager::TaskManager,
@@ -177,22 +177,22 @@ impl TaskExecutor for SyncTaskExecutor {
     type TaskQueueType =
         SyncTaskQueue<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>;
 
+    // Move the common bounds to associated types to declutter the method signature
+    type RateLimiter = WebRequestRateLimiter;
+    type RateLimiterBuilder = WebRequestRateLimiterBuilder;
+
+    type QueueBuilder = SyncTaskQueueBuilder<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>;
+    
+    type CompletedTaskChannelType = TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>;
+    type StreamingDataChannelType = TokioBroadcastingMessageBusReceiver<StreamingData>;
+    type FailedTaskChannelType = TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>;
+    type WorkerErrorChannelType = TokioBroadcastingMessageBusReceiver<SyncWorkerError>;
+    
     // add new sync plans to synchronize
     async fn assign(
         &mut self,
         sync_plans: Vec<Arc<RwLock<SyncPlan>>>,
     ) -> Result<(), TaskExecutorError>
-    where
-        <WebRequestRateLimiter as RateLimiter>::BuilderType:
-            Builder<Product = WebRequestRateLimiter> + RateLimiterBuilder + Send,
-        <Self::TaskQueueType as TaskQueue>::BuilderType: Builder<Product = Self::TaskQueueType>
-            + TaskQueueBuilder<
-                RateLimiterType = WebRequestRateLimiter,
-                TaskRequestReceiverType = TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
-            > + Send,
-        <Self::TaskManagerType as SyncTaskManager>::TaskQueueType: TaskQueue,
-        <Self as TaskExecutor>::TaskManagerType: SyncTaskManager,
-        <Self as TaskExecutor>::TaskQueueType: TaskQueue,
     {
         let (task_senders, task_receivers) =
             self.allocate_task_request_channels(sync_plans.len(), None);
@@ -289,22 +289,20 @@ impl TaskExecutor for SyncTaskExecutor {
     }
 
     // wait and continuously get completed task
-    // should receive data after calling run in another thread
-    async fn subscribe_completed_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, TaskExecutorError> {
+    async fn subscribe_completed_task(&mut self) -> Self::CompletedTaskChannelType {
         todo!()
     }
 
     // wait and continuously get streaming data
-    // should receive data after calling run in another thread
-    async fn subscribe_streaming_data(&mut self) -> Result<StreamingData, TaskExecutorError> {
+    async fn subscribe_streaming_data(&mut self) -> Self::StreamingDataChannelType {
         todo!()
     }
 
-    async fn subscribe_failed_task(&mut self) -> Result<Arc<Mutex<SyncTask>>, TaskExecutorError> {
+    async fn subscribe_failed_task(&mut self) -> Self::FailedTaskChannelType  {
         todo!()
     }
 
-    async fn subscribe_worker_error(&mut self) -> Result<SyncWorkerError, TaskExecutorError> {
+    async fn subscribe_worker_error(&mut self) -> Self::WorkerErrorChannelType {
         todo!()
     }
 

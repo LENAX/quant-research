@@ -266,9 +266,9 @@ where
         Ok(())
     }
 
-    async fn stop_sending_task(&mut self, get_plan_id: Uuid) -> Result<(), TaskManagerError> {
+    async fn stop_sending_task(&mut self, plan_id: Uuid) -> Result<(), TaskManagerError> {
         let queues = self.queues.read().await;
-        if let Some(queue) = queues.get(&get_plan_id) {
+        if let Some(queue) = queues.get(&plan_id) {
             let mut q_lock = queue.lock().await;
             q_lock.stop();
             Ok(())
@@ -279,10 +279,10 @@ where
 
     async fn stop_and_remove_sync_plan(
         &mut self,
-        get_plan_id: Uuid,
+        plan_id: Uuid,
     ) -> Result<Vec<Arc<Mutex<SyncTask>>>, TaskManagerError> {
         let queues = self.queues.read().await;
-        if let Some(queue) = queues.get(&get_plan_id) {
+        if let Some(queue) = queues.get(&plan_id) {
             let mut q_lock = queue.lock().await;
             let unsent_task = q_lock.drain_all();
             Ok(unsent_task)
@@ -291,9 +291,9 @@ where
         }
     }
 
-    async fn pause_sending_task(&mut self, get_plan_id: Uuid) -> Result<(), TaskManagerError> {
+    async fn pause_sending_task(&mut self, plan_id: Uuid) -> Result<(), TaskManagerError> {
         let queues = self.queues.read().await;
-        if let Some(queue) = queues.get(&get_plan_id) {
+        if let Some(queue) = queues.get(&plan_id) {
             let mut queue_lock = queue.lock().await;
             queue_lock.pause();
             Ok(())
@@ -302,9 +302,9 @@ where
         }
     }
 
-    async fn resume_sending_tasks(&mut self, get_plan_id: Uuid) -> Result<(), TaskManagerError> {
+    async fn resume_sending_tasks(&mut self, plan_id: Uuid) -> Result<(), TaskManagerError> {
         let queues = self.queues.read().await;
-        if let Some(queue) = queues.get(&get_plan_id) {
+        if let Some(queue) = queues.get(&plan_id) {
             let mut queue_lock = queue.lock().await;
             queue_lock.resume();
             Ok(())
@@ -315,16 +315,16 @@ where
 
     async fn report_task_sending_progress(
         &self,
-        get_plan_id: Uuid,
+        plan_id: Uuid,
     ) -> Result<TaskSendingProgress, TaskManagerError> {
         let queues = self.queues.read().await;
-        if let Some(queue) = queues.get(&get_plan_id) {
+        if let Some(queue) = queues.get(&plan_id) {
             let queue_lock = queue.lock().await;
             let n_task_sent = queue_lock.initial_size() - queue_lock.len();
             let complete_rate = (n_task_sent as f32) / (queue_lock.initial_size() as f32);
             let total_tasks = queue_lock.initial_size();
             let progress =
-                TaskSendingProgress::new(get_plan_id, n_task_sent, total_tasks, complete_rate);
+                TaskSendingProgress::new(plan_id, n_task_sent, total_tasks, complete_rate);
             Ok(progress)
         } else {
             Err(TaskManagerError::QueueNotFound)
@@ -337,7 +337,7 @@ where
         let queues = self.queues.read().await;
         let progress_report_tasks = queues
             .keys()
-            .map(|get_plan_id| async { self.report_task_sending_progress(*get_plan_id).await });
+            .map(|plan_id| async { self.report_task_sending_progress(*plan_id).await });
         try_join_all(progress_report_tasks).await
     }
 

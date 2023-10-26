@@ -19,7 +19,6 @@ use crate::{
     domain::synchronization::{
         custom_errors::TimerError,
         rate_limiter::{RateLimitStatus, RateLimiter},
-        value_objects::sync_config::RateLimiterImpls,
     },
     infrastructure::sync::factory::Builder,
 };

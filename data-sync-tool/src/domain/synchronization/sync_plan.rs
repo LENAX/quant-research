@@ -75,9 +75,7 @@ impl SyncPlan {
         dataset_id: Option<Uuid>,
         dataset_name: &str,
         param_template_id: Option<Uuid>,
-        sync_config: SyncCSyncMode {
-            return self.sync_config.sync_mode()
-        }onfig,
+        sync_config: SyncConfig,
     ) -> SyncPlan {
         SyncPlan {
             id: Uuid::new_v4(),

@@ -4,7 +4,7 @@ use getset::{Getters, Setters};
 use uuid::Uuid;
 
 use crate::{
-    domain::synchronization::value_objects::sync_config::{RateQuota, RateLimiterImpls},
+    domain::synchronization::value_objects::sync_config::RateQuota,
     infrastructure::mq::factory::{MQType, SupportedMQImpl},
 };
 
@@ -31,7 +31,6 @@ impl From<&RateQuota> for CreateRateLimiterRequest {
 pub struct CreateSyncTaskQueueRequest {
     dataset_id: Uuid,
     sync_plan_id: Uuid,
-    rate_limiter_impl: RateLimiterImpls,
     rate_limiter_param: Option<CreateRateLimiterRequest>,
     max_retry: Option<u32>,
 }

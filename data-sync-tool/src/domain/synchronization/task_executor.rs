@@ -25,6 +25,9 @@ use super::{rate_limiter::RateLimiter, sync_plan::SyncPlan, sync_task::SyncTask}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskExecutorError {
     LoadPlanFailure,
+    NoWorkerAssigned,
+    WorkerAssignmentFailed(String),
+    SyncFailure(String)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,20 +71,20 @@ pub trait TaskExecutor: Sync + Send {
     ) -> Result<(), TaskExecutorError>;
 
     // wait and continuously get completed task
-    async fn subscribe_completed_task(&mut self) -> Self::CompletedTaskChannelType;
+    fn subscribe_completed_task(&mut self) -> Self::CompletedTaskChannelType;
 
     // wait and continuously get streaming data
-    async fn subscribe_streaming_data(&mut self) -> Self::StreamingDataChannelType;
+    fn subscribe_streaming_data(&mut self) -> Self::StreamingDataChannelType;
 
-    async fn subscribe_failed_task(&mut self) -> Self::FailedTaskChannelType;
+    fn subscribe_failed_task(&mut self) -> Self::FailedTaskChannelType;
 
-    async fn subscribe_worker_error(&mut self) -> Self::WorkerErrorChannelType;
+    fn subscribe_worker_error(&mut self) -> Self::WorkerErrorChannelType;
 
     // run a single plan. Either start a new plan or continue a paused plan
     async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;
 
     // run all assigned plans
-    async fn run_all(&mut self) -> Result<(), TaskExecutorError>;
+    async fn run_all(&'static mut self) -> Result<(), TaskExecutorError>;
 
     // temporarily pause a plan
     async fn pause(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;

@@ -111,18 +111,14 @@ pub struct SyncTaskExecutor {
             TokioBroadcastingMessageBusSender<SyncWorkerError>,
         >,
     >,
-    task_manager: Arc<
-        Mutex<
-            TaskManager<
-                SyncTaskQueue<
-                    WebRequestRateLimiter,
-                    TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
-                >,
-                TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
-                TokioMpscMessageBusSender<TaskManagerError>,
-                TokioSpmcMessageBusReceiver<Arc<Mutex<SyncTask>>>,
-            >,
+    task_manager: TaskManager<
+        SyncTaskQueue<
+            WebRequestRateLimiter,
+            TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
         >,
+        TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
+        TokioMpscMessageBusSender<TaskManagerError>,
+        TokioSpmcMessageBusReceiver<Arc<Mutex<SyncTask>>>,
     >,
     // collect completed task; expose an api to get completed tasks
     completed_task_receiver: TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
@@ -209,9 +205,9 @@ impl TaskExecutor for SyncTaskExecutor {
             create_tokio_broadcasting_channel::<SyncWorkerError>(200);
 
         // Lock the task manager and load the sync plans
-        let mut task_manager_lock = self.task_manager.lock().await;
+        // let mut task_manager_lock = self.task_manager.lock().await;
         // FIXME: Channels between workers, queues, and task manager do not match
-        task_manager_lock.set_task_sender(todo_task_sender);
+        self.task_manager.set_task_sender(todo_task_sender);
 
         // task_manager_lock.set_failed_task_channel(failed_task_receiver);
         self.completed_task_receiver = completed_task_receiver;
@@ -297,7 +293,7 @@ impl TaskExecutor for SyncTaskExecutor {
         }
 
         // load sync plans into task manager
-        match task_manager_lock.load_sync_plans::<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>(sync_plans, task_receivers).await {
+        match self.task_manager.load_sync_plans::<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>(sync_plans, task_receivers).await {
             Ok(_) => Ok(()),
             Err(e) => { 
                 error!("{:?}", e);
@@ -329,8 +325,8 @@ impl TaskExecutor for SyncTaskExecutor {
     // run a single plan. Either start a new plan or continue a paused plan
     // Note that it only marks a plan’s state as running, but will not actually run unless run_all is being called
     async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError> {
-        let mut task_manager = self.task_manager.lock().await;
-        match task_manager.resume_sending_tasks(sync_plan_id).await {
+        // let mut task_manager = self.task_manager.lock().await;
+        match self.task_manager.resume_sending_tasks(sync_plan_id).await {
             Ok(_) => {
                 if self.http_api_sync_workers.contains_key(&sync_plan_id) {
                     let assigned_worker = self.http_api_sync_workers.get_mut(&sync_plan_id).unwrap();
@@ -363,6 +359,7 @@ impl TaskExecutor for SyncTaskExecutor {
 
     // run all assigned plans
     async fn run_all(&'static mut self) -> Result<(), TaskExecutorError> {
+        let self_arc = Arc::new(self);
         let mut http_worker_tasks: Vec<_> = self.http_api_sync_workers.values_mut().map(|w| {
             let sync_task = tokio::spawn(async {
                 match w.start_sync().await {
@@ -391,11 +388,12 @@ impl TaskExecutor for SyncTaskExecutor {
             return sync_task;
         }).collect();
 
-        let task_manager_arc_mutex = self.task_manager.clone();
+        // let task_manager_arc_mutex = self.task_manager.clone();
         // FIXME: once task manager is started there is no way to release the lock and change it
+        
         let send_task = tokio::spawn(async move {
-            let mut task_manager = task_manager_arc_mutex.lock().await;
-            let result = task_manager.listen_for_get_task_request().await;
+            // let mut task_manager = task_manager_arc_mutex.lock().await;
+            let result = self_arc.task_manager.listen_for_get_task_request().await;
             info!("result: {:?}", result);
             match result {
                 Ok(()) => {

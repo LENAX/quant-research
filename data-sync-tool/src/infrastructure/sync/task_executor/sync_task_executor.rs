@@ -90,6 +90,8 @@ use uuid::Uuid;
  *    - progress report: summarize current progress and return it
  */
 
+// Consider a message-driven design to avoid overusing locks and to simplify design.
+
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncTaskExecutor {
@@ -206,7 +208,6 @@ impl TaskExecutor for SyncTaskExecutor {
 
         // Lock the task manager and load the sync plans
         // let mut task_manager_lock = self.task_manager.lock().await;
-        // FIXME: Channels between workers, queues, and task manager do not match
         self.task_manager.set_task_sender(todo_task_sender);
 
         // task_manager_lock.set_failed_task_channel(failed_task_receiver);

@@ -35,6 +35,13 @@ pub enum WorkerState {
     Stopped,
 }
 
+pub enum WorkerCommand {
+    Start,
+    Pause,
+    Resume,
+    Cancel,
+    Assign(Uuid)
+}
 
 #[async_trait]
 pub trait SyncWorker: Send + Sync {

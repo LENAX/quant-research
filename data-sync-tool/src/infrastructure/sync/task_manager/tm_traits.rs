@@ -115,6 +115,13 @@ impl TaskSendingProgress {
     }
 }
 
+pub enum TaskManagerCommand {
+    AddPlan(Vec<RwLock<SyncPlan>>),
+    CancelPlan(Uuid),
+    PausePlan(Uuid),
+    ResumePlan(Uuid)
+}
+
 #[async_trait]
 pub trait SyncTaskManager: Sync + Send {
     type TaskQueueType;

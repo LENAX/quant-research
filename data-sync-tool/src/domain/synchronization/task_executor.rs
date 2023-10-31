@@ -51,16 +51,19 @@ pub trait TaskExecutor: Sync + Send {
     type RateLimiter: RateLimiter;
     type RateLimiterBuilder: Builder<Product = Self::RateLimiter> + RateLimiterBuilder + Send;
 
-    type QueueBuilder: Builder<Product = Self::TaskQueueType> 
-        + TaskQueueBuilder<
-            RateLimiterType = Self::RateLimiter,
-            TaskRequestReceiverType = TokioBroadcastingMessageBusReceiver<GetTaskRequest>,
-        > + Send;
+    type QueueBuilder;
 
-    type CompletedTaskChannelType;
-    type StreamingDataChannelType;
-    type FailedTaskChannelType;
-    type WorkerErrorChannelType;
+    type CompletedTaskReceiverType;
+    type StreamingDataReceiverType;
+    type FailedTaskReceiverType;
+    type WorkerErrorReceiverType;
+    type ProgressReceiverType;
+
+    // Initialize TaskExecutor and wait for commands
+    async fn init(&'static mut self,) -> Result<(), TaskExecutorError>;
+
+    // Deallocate resources and shutdown TaskExecutor
+    async fn shutdown(&mut self) -> Result<(), TaskExecutorError>;
 
     // add new sync plans to synchronize
     async fn assign(
@@ -69,14 +72,16 @@ pub trait TaskExecutor: Sync + Send {
     ) -> Result<(), TaskExecutorError>;
 
     // wait and continuously get completed task
-    fn subscribe_completed_task(&mut self) -> Self::CompletedTaskChannelType;
+    fn subscribe_completed_task(&mut self) -> Self::CompletedTaskReceiverType;
 
     // wait and continuously get streaming data
-    fn subscribe_streaming_data(&mut self) -> Self::StreamingDataChannelType;
+    fn subscribe_streaming_data(&mut self) -> Self::StreamingDataReceiverType;
 
-    fn subscribe_failed_task(&mut self) -> Self::FailedTaskChannelType;
+    fn subscribe_failed_task(&mut self) -> Self::FailedTaskReceiverType;
 
-    fn subscribe_worker_error(&mut self) -> Self::WorkerErrorChannelType;
+    fn subscribe_worker_error(&mut self) -> Self::WorkerErrorReceiverType;
+
+    fn subscribe_progress(&mut self) -> Self::ProgressReceiverType;
 
     // run a single plan. Either start a new plan or continue a paused plan
     async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;
@@ -91,11 +96,8 @@ pub trait TaskExecutor: Sync + Send {
     async fn pause_all(&mut self) -> Result<(), TaskExecutorError>;
 
     // cancel sync for plan, also removes it from the executor
-    async fn cancel(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>;
+    async fn cancel(&mut self, sync_plan_ids: Vec<Uuid>) -> Result<(), TaskExecutorError>;
 
     // cancel and drop all plans
     async fn cancel_all(&mut self) -> Result<(), TaskExecutorError>;
-
-    // report current progress
-    async fn report_progress(&self) -> Result<SyncProgress, TaskExecutorError>;
 }

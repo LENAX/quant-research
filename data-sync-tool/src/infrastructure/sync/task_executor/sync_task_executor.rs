@@ -12,7 +12,7 @@ use crate::{
     domain::synchronization::{
         sync_plan::SyncPlan,
         sync_task::SyncTask,
-        task_executor::{SyncProgress, TaskExecutor, TaskExecutorError},
+        task_executor::{SyncProgress, TaskExecutor, TaskExecutorError, PlanProgress},
         value_objects::sync_config::SyncMode,
     },
     infrastructure::{
@@ -31,7 +31,7 @@ use crate::{
                 sync_rate_limiter::WebRequestRateLimiter,
                 sync_task_queue::SyncTaskQueue,
                 task_manager::TaskManager,
-                tm_traits::SyncTaskManager,
+                tm_traits::{SyncTaskManager, TaskManagerCommand},
             },
             workers::{
                 errors::SyncWorkerError,
@@ -41,7 +41,7 @@ use crate::{
                 },
                 http_worker::WebAPISyncWorker,
                 websocket_worker::WebsocketSyncWorker,
-                worker_traits::SyncWorker,
+                worker_traits::{SyncWorker, WorkerCommand},
             },
             GetTaskRequest,
         },
@@ -122,6 +122,10 @@ pub struct SyncEngine {
         TokioMpscMessageBusSender<TaskManagerError>,
         TokioSpmcMessageBusReceiver<Arc<Mutex<SyncTask>>>,
     >,
+    // command senders
+    task_manager_command_sender: TokioMpscMessageBusSender<TaskManagerCommand>,
+    worker_command_sender: TokioSpmcMessageBusReceiver<WorkerCommand>,
+
     // collect completed task; expose an api to get completed tasks
     completed_task_receiver: TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
     streaming_data_receiver: TokioBroadcastingMessageBusReceiver<StreamingData>,
@@ -148,18 +152,7 @@ impl SyncEngine {
         Vec<TokioBroadcastingMessageBusSender<GetTaskRequest>>,
         Vec<TokioBroadcastingMessageBusReceiver<GetTaskRequest>>,
     ) {
-        let (task_sender, task_receiver) =
-            create_tokio_broadcasting_channel::<GetTaskRequest>(channel_size.unwrap_or(200));
-
-        let mut task_senders = Vec::with_capacity(n_sync_plans);
-        let mut task_receivers = Vec::with_capacity(n_sync_plans);
-
-        for _ in 0..n_sync_plans {
-            task_senders.push(task_sender.clone());
-            task_receivers.push(task_receiver.clone());
-        }
-
-        (task_senders, task_receivers)
+        todo!()
     }
 }
 
@@ -180,239 +173,64 @@ impl TaskExecutor for SyncEngine {
 
     type QueueBuilder = SyncTaskQueueBuilder<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>;
     
-    type CompletedTaskChannelType = TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>;
-    type StreamingDataChannelType = TokioBroadcastingMessageBusReceiver<StreamingData>;
-    type FailedTaskChannelType = TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>;
-    type WorkerErrorChannelType = TokioBroadcastingMessageBusReceiver<SyncWorkerError>;
+    type CompletedTaskReceiverType = TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>;
+    type StreamingDataReceiverType = TokioBroadcastingMessageBusReceiver<StreamingData>;
+    type FailedTaskReceiverType = TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>;
+    type WorkerErrorReceiverType = TokioBroadcastingMessageBusReceiver<SyncWorkerError>;
+    type ProgressReceiverType = TokioSpmcMessageBusReceiver<PlanProgress>;
     
+    /// Initialize TaskExecutor and wait for commands
+    /// This method must be called before using any TaskExecutor implementation as it allocates necessary resources to run
+    /// 
+    /// Detailed Design:
+    /// 
+    async fn init(&'static mut self,) -> Result<(), TaskExecutorError> {
+        todo!()
+    }
+
+    // Deallocate resources and shutdown TaskExecutor
+    async fn shutdown(&mut self) -> Result<(), TaskExecutorError> {
+        todo!()
+    }
+
     // add new sync plans to synchronize
     async fn assign(
         &mut self,
         sync_plans: Vec<Arc<RwLock<SyncPlan>>>,
-    ) -> Result<(), TaskExecutorError>
-    {
-        let (task_senders, task_receivers) =
-            self.allocate_task_request_channels(sync_plans.len(), None);
-        let (todo_task_sender, todo_task_receiver) =
-            create_tokio_broadcasting_channel::<Arc<Mutex<SyncTask>>>(200);
-        
-        // Who should receive the completed task? Of the caller of sync task executor
-        let (completed_task_sender, completed_task_receiver) =
-            create_tokio_broadcasting_channel::<Arc<Mutex<SyncTask>>>(200);
-        let (completed_streaming_data_sender, completed_streaming_data_receiver) =
-            create_tokio_broadcasting_channel::<StreamingData>(200);
-        let (failed_task_sender, failed_task_receiver) =
-            create_tokio_broadcasting_channel::<Arc<Mutex<SyncTask>>>(200);
-        let (worker_error_sender, worker_error_receiver) =
-            create_tokio_broadcasting_channel::<SyncWorkerError>(200);
-
-        // Lock the task manager and load the sync plans
-        // let mut task_manager_lock = self.task_manager.lock().await;
-        self.task_manager.set_task_sender(todo_task_sender);
-
-        // task_manager_lock.set_failed_task_channel(failed_task_receiver);
-        self.completed_task_receiver = completed_task_receiver;
-        self.streaming_data_receiver = completed_streaming_data_receiver;
-        self.failed_task_receiver = failed_task_receiver;
-        self.worker_error_receiver = worker_error_receiver;
-
-
-        // create and assign a worker for each sync plan
-        for (i, sync_plan) in sync_plans.iter().enumerate() {
-            let plan_lock = sync_plan.read().await;
-            match plan_lock.sync_config().sync_mode() {
-                SyncMode::HttpAPI => {
-                    let mut http_worker: WebAPISyncWorker<
-                        TokioBroadcastingMessageBusSender<GetTaskRequest>,
-                        TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
-                        TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
-                        TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
-                    > = create_http_worker::<
-                        WebAPISyncWorkerBuilder<
-                            TokioBroadcastingMessageBusSender<GetTaskRequest>,
-                            TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
-                            TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
-                            TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
-                        >,
-                        TokioBroadcastingMessageBusSender<GetTaskRequest>,
-                        TokioBroadcastingMessageBusReceiver<Arc<tokio::sync::Mutex<SyncTask>>>,
-                        TokioBroadcastingMessageBusSender<Arc<tokio::sync::Mutex<SyncTask>>>,
-                        TokioBroadcastingMessageBusSender<Arc<tokio::sync::Mutex<SyncTask>>>,
-                    >(
-                        task_senders[i].clone(),
-                        todo_task_receiver.clone(),
-                        completed_task_sender.clone(),
-                        failed_task_sender.clone(),
-                    );
-                    match http_worker.assign_sync_plan(plan_lock.id()) {
-                        Ok(_) => {
-                            self.http_api_sync_workers
-                                .insert(*http_worker.id(), http_worker);
-                        },
-                        Err(e) => {
-                            error!("{:?}", e);
-                            return Err(TaskExecutorError::WorkerAssignmentFailed(format!("Unable to assign plan to worker: {:?}", e)));
-                        }
-                    }
-                    
-                }
-                SyncMode::WebsocketStreaming => {
-                    let mut websocket_worker: WebsocketSyncWorker<
-                        TokioBroadcastingMessageBusSender<GetTaskRequest>,
-                        TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
-                        TokioBroadcastingMessageBusSender<StreamingData>,
-                        TokioBroadcastingMessageBusSender<SyncWorkerError>,
-                    > = create_websocket_worker::<
-                        WebsocketSyncWorkerBuilder<
-                            TokioBroadcastingMessageBusSender<GetTaskRequest>,
-                            TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
-                            TokioBroadcastingMessageBusSender<StreamingData>,
-                            TokioBroadcastingMessageBusSender<SyncWorkerError>>,
-                        TokioBroadcastingMessageBusSender<GetTaskRequest>,
-                        TokioBroadcastingMessageBusReceiver<Arc<Mutex<SyncTask>>>,
-                        TokioBroadcastingMessageBusSender<StreamingData>,
-                        TokioBroadcastingMessageBusSender<SyncWorkerError>,
-                    >(
-                        task_senders[i].clone(),
-                        todo_task_receiver.clone(),
-                        completed_streaming_data_sender.clone(),
-                        worker_error_sender.clone(),
-                    );
-                    match websocket_worker.assign_sync_plan(plan_lock.id()) {
-                        Ok(_) => {
-                            self.websocket_streaming_workers
-                                .insert(*websocket_worker.id(), websocket_worker);
-                        },
-                        Err(e) => {
-                            error!("{:?}", e);
-                            return Err(TaskExecutorError::WorkerAssignmentFailed(format!("Unable to assign plan to worker: {:?}", e)));
-                        }
-                    }
-                    
-                }
-            }
-        }
-
-        // load sync plans into task manager
-        match self.task_manager.load_sync_plans::<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>(sync_plans, task_receivers).await {
-            Ok(_) => Ok(()),
-            Err(e) => { 
-                error!("{:?}", e);
-                Err(TaskExecutorError::LoadPlanFailure) 
-            }, // Convert the error type if needed
-        }
+    ) -> Result<(), TaskExecutorError> {
+        todo!()
     }
 
-    // get completed task receiver to subscribe to completed task
-    fn subscribe_completed_task(&mut self) -> Self::CompletedTaskChannelType {
-        return self.completed_task_receiver.clone();
+    // wait and continuously get completed task
+    fn subscribe_completed_task(&mut self) -> Self::CompletedTaskReceiverType  {
+        todo!()
     }
 
-    // get streaming data receiver
-    fn subscribe_streaming_data(&mut self) -> Self::StreamingDataChannelType {
-        return self.streaming_data_receiver.clone();
+    // wait and continuously get streaming data
+    fn subscribe_streaming_data(&mut self) -> Self::StreamingDataReceiverType  {
+        todo!()
     }
 
-    // get failed task receiver
-    fn subscribe_failed_task(&mut self) -> Self::FailedTaskChannelType  {
-        return self.failed_task_receiver.clone();
+    fn subscribe_failed_task(&mut self) -> Self::FailedTaskReceiverType  {
+        todo!()
     }
 
-    // get worker error receiver
-    fn subscribe_worker_error(&mut self) -> Self::WorkerErrorChannelType {
-        return self.worker_error_receiver.clone();
+    fn subscribe_worker_error(&mut self) -> Self::WorkerErrorReceiverType  {
+        todo!()
+    }
+
+    fn subscribe_progress(&mut self) -> Self::ProgressReceiverType  {
+        todo!()
     }
 
     // run a single plan. Either start a new plan or continue a paused plan
-    // Note that it only marks a plan’s state as running, but will not actually run unless run_all is being called
-    async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError> {
-        // let mut task_manager = self.task_manager.lock().await;
-        match self.task_manager.resume_sending_tasks(sync_plan_id).await {
-            Ok(_) => {
-                if self.http_api_sync_workers.contains_key(&sync_plan_id) {
-                    let assigned_worker = self.http_api_sync_workers.get_mut(&sync_plan_id).unwrap();
-                    match assigned_worker.start_sync().await {
-                        Ok(_) => { return Ok(()); },
-                        Err(e) => {
-                            error!("{:?}",e);
-                            return Err(TaskExecutorError::WorkerAssignmentFailed(format!("{:?}",e)));
-                        }
-                    }
-                } else if self.websocket_streaming_workers.contains_key(&sync_plan_id) {
-                    let assigned_worker = self.websocket_streaming_workers.get_mut(&sync_plan_id).unwrap();
-                    match assigned_worker.start_sync().await {
-                        Ok(_) => { return Ok(()); },
-                        Err(e) => {
-                            error!("{:?}",e);
-                            return Err(TaskExecutorError::WorkerAssignmentFailed(format!("{:?}",e)));
-                        }
-                    }
-                } else {
-                    return Err(TaskExecutorError::NoWorkerAssigned);
-                }
-            },
-            Err(e) => {
-                error!("{:?}", e);
-                return Err(TaskExecutorError::SyncFailure(format!("Start syncing plan failed because {:?}", e)));
-            }
-        }
+    async fn run(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError>  {
+        todo!()
     }
 
     // run all assigned plans
-    async fn run_all(&'static mut self) -> Result<(), TaskExecutorError> {
-        let self_arc = Arc::new(self);
-        let mut http_worker_tasks: Vec<_> = self.http_api_sync_workers.values_mut().map(|w| {
-            let sync_task = tokio::spawn(async {
-                match w.start_sync().await {
-                    Ok(()) => {
-                        info!("Worker {} started syncing.", w.id());
-                    },
-                    Err(e) => {
-                        error!("Worker {} encountered error: {:?}", w.id(), e);
-                    }
-                }
-            });
-            return sync_task;
-        }).collect();
-
-        let mut websocket_worker_tasks: Vec<_> = self.websocket_streaming_workers.values_mut().map(|w| {
-            let sync_task = tokio::spawn(async {
-                match w.start_sync().await {
-                    Ok(()) => {
-                        info!("Worker {} started syncing.", w.id());
-                    },
-                    Err(e) => {
-                        error!("Worker {} encountered error: {:?}", w.id(), e);
-                    }
-                }
-            });
-            return sync_task;
-        }).collect();
-
-        // let task_manager_arc_mutex = self.task_manager.clone();
-        // FIXME: once task manager is started there is no way to release the lock and change it
-        
-        let send_task = tokio::spawn(async move {
-            // let mut task_manager = task_manager_arc_mutex.lock().await;
-            let result = self_arc.task_manager.listen_for_get_task_request().await;
-            info!("result: {:?}", result);
-            match result {
-                Ok(()) => {
-                    info!("Finished successfully!");
-                }
-                Err(e) => {
-                    info!("Failed: {}", e);
-                }
-            }
-        });
-
-        let mut all_tasks = Vec::new();
-        all_tasks.append(&mut http_worker_tasks);
-        all_tasks.append(&mut websocket_worker_tasks);
-        all_tasks.push(send_task);
-        
-        join_all(all_tasks).await;
-        Ok(())
+    async fn run_all(&'static mut self) -> Result<(), TaskExecutorError>  {
+        todo!()
     }
 
     // temporarily pause a plan
@@ -421,22 +239,17 @@ impl TaskExecutor for SyncEngine {
     }
 
     // pause all plans
-    async fn pause_all(&mut self) -> Result<(), TaskExecutorError> {
+    async fn pause_all(&mut self) -> Result<(), TaskExecutorError>  {
         todo!()
     }
 
     // cancel sync for plan, also removes it from the executor
-    async fn cancel(&mut self, sync_plan_id: Uuid) -> Result<(), TaskExecutorError> {
+    async fn cancel(&mut self, sync_plan_ids: Vec<Uuid>) -> Result<(), TaskExecutorError>  {
         todo!()
     }
 
     // cancel and drop all plans
-    async fn cancel_all(&mut self) -> Result<(), TaskExecutorError> {
-        todo!()
-    }
-
-    // report current progress
-    async fn report_progress(&self) -> Result<SyncProgress, TaskExecutorError> {
+    async fn cancel_all(&mut self) -> Result<(), TaskExecutorError>  {
         todo!()
     }
 }

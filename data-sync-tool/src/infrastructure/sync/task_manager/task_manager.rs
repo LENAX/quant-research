@@ -3,7 +3,7 @@
 //!
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::Arc,
 };
 
@@ -38,7 +38,7 @@ use super::{
     errors::TaskManagerError,
     factory::{
         rate_limiter::{create_rate_limiter, RateLimiterBuilder},
-        task_queue::{create_task_queue, SyncTaskQueueBuilder, TaskQueueBuilder},
+        task_queue::{create_task_queue, TaskQueueBuilder},
     },
     task_queue::TaskQueue,
     tm_traits::{SyncTaskManager, TaskManagerErrorMPSCSender, TaskSendingProgress},
@@ -55,12 +55,11 @@ pub enum TaskManagerState {
     Stopped,
 }
 
-// Hint: Use trait to separate TaskManager and SyncTaskQueue
-// Then use generics with trait bound
-// In this way, there is no need to pass extra generic param to build the struct.
-
 /// TaskManager
 /// TaskManger is responsible for sending tasks for each sync plan upon receiving request.
+/// Supported operations:
+/// 1. Add, Drop SyncPlan
+/// 2. Send State Management: Start, Pause, Stop sending tasks
 #[derive(Derivative, Getters, Setters, Default)]
 #[getset(get = "pub", set = "pub")]
 pub struct TaskManager<TQ, MT, ES, MF>

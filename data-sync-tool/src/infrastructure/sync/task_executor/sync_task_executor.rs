@@ -1,29 +1,13 @@
-use async_trait::async_trait;
 /**
- * SyncTaskExecutor 同步任务执行管理模块
+ * SyncEngine 同步任务执行管理模块
  * 用于支持数据同步任务的执行和运行状态管理。
  *
  */
-// use crate::{
-//     application::synchronization::dtos::task_manager::CreateTaskManagerRequest,
-//     domain::synchronization::sync_task::SyncTask,
-//     infrastructure::mq::{
-//         factory::{
-//             create_tokio_broadcasting_channel, create_tokio_mpsc_channel, create_tokio_spmc_channel,
-//         },
-//         // message_bus::{MessageBusSender, StaticClonableMpscMQ},
-//         tokio_channel_mq::{
-//             TokioBroadcastingMessageBusReceiver, TokioBroadcastingMessageBusSender,
-//             TokioMpscMessageBusReceiver, TokioMpscMessageBusSender, TokioSpmcMessageBusReceiver,
-//             TokioSpmcMessageBusSender,
-//         },
-//     },
-// };
+use async_trait::async_trait;
 use derivative::Derivative;
 use futures::future::join_all;
 use getset::{Getters, MutGetters, Setters};
 use log::{error, info};
-// use serde_json::Value;
 use crate::{
     domain::synchronization::{
         sync_plan::SyncPlan,
@@ -71,9 +55,9 @@ use uuid::Uuid;
 /**
  * Detailed Design
  *
- * By default, each sync plan is handled by one worker, but you can add more workers to each plan as long as it does not exceeds the
- * concurrency level limit.
- *
+ * SyncEngine uses a command-driven approach to orchestrate its submodules. When initialized, it
+ * creates and allocates the submodules and resources. Then it can be called by sending commands or calling proxy methods.
+ * 
  * Primary Work Procedures
  * 1. Initialization
  *    - create data communication channels for workers and the task manager
@@ -92,9 +76,23 @@ use uuid::Uuid;
 
 // Consider a message-driven design to avoid overusing locks and to simplify design.
 
+#[derive(Derivative)]
+#[derivative(Default(bound = ""))]
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum SyncEngineState {
+    #[derivative(Default)]
+    Created,
+    Ready,
+    Running,
+    Idle,
+    Stopped
+}
+
 #[derive(Derivative, Getters, Setters, MutGetters)]
 #[getset(get = "pub", set = "pub")]
-pub struct SyncTaskExecutor {
+pub struct SyncEngine {
+    state: SyncEngineState,
+    // scalable pool of http api synchronization workers
     http_api_sync_workers: HashMap<
         Uuid,
         WebAPISyncWorker<
@@ -104,6 +102,7 @@ pub struct SyncTaskExecutor {
             TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,
         >,
     >,
+    // scalable pool of websocket synchronization workers
     websocket_streaming_workers: HashMap<
         Uuid,
         WebsocketSyncWorker<
@@ -113,6 +112,7 @@ pub struct SyncTaskExecutor {
             TokioBroadcastingMessageBusSender<SyncWorkerError>,
         >,
     >,
+    // task manager, responsible for managing task sending states and throttling
     task_manager: TaskManager<
         SyncTaskQueue<
             WebRequestRateLimiter,
@@ -129,7 +129,7 @@ pub struct SyncTaskExecutor {
     worker_error_receiver: TokioBroadcastingMessageBusReceiver<SyncWorkerError>
 }
 
-impl SyncTaskExecutor {
+impl SyncEngine {
     pub fn new() -> Self {
         todo!()
     }
@@ -164,7 +164,7 @@ impl SyncTaskExecutor {
 }
 
 #[async_trait]
-impl TaskExecutor for SyncTaskExecutor {
+impl TaskExecutor for SyncEngine {
     type TaskManagerType = TaskManager<
         SyncTaskQueue<WebRequestRateLimiter, TokioBroadcastingMessageBusReceiver<GetTaskRequest>>,
         TokioBroadcastingMessageBusSender<Arc<Mutex<SyncTask>>>,

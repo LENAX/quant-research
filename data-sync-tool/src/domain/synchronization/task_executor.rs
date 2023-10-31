@@ -2,7 +2,7 @@ use async_trait::async_trait;
 /// Task Executor Trait
 /// Defines the common interface for task execution
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::infrastructure::{
@@ -11,16 +11,14 @@ use crate::infrastructure::{
         factory::Builder,
         task_manager::{
             factory::{rate_limiter::RateLimiterBuilder, task_queue::TaskQueueBuilder},
-            sync_rate_limiter::WebRequestRateLimiter,
-            task_manager::TaskManager,
             task_queue::TaskQueue,
             tm_traits::SyncTaskManager,
         },
-        GetTaskRequest, shared_traits::StreamingData, workers::errors::SyncWorkerError,
+        GetTaskRequest
     },
 };
 
-use super::{rate_limiter::RateLimiter, sync_plan::SyncPlan, sync_task::SyncTask};
+use super::{rate_limiter::RateLimiter, sync_plan::SyncPlan};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskExecutorError {

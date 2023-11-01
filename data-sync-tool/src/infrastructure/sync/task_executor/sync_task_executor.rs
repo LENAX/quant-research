@@ -81,11 +81,10 @@ use uuid::Uuid;
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum SyncEngineState {
     #[derivative(Default)]
-    Created,
-    Ready,
-    Running,
-    Idle,
-    Stopped
+    Created, // default state after being created
+    Ready, // becomes ready when being initialized or no task is assigned
+    Running, // performing synchronization
+    Stopped // turned to stopped state after calling stop, need to be reinitialized to get into the ready state
 }
 
 #[derive(Derivative, Getters, Setters, MutGetters)]

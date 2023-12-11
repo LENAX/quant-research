@@ -65,18 +65,16 @@
 
 #### Sync Engine Creation
 
-1. Create TaskManager
-2. Create WorkerPool
-3. return a constructed
+1. Create and run TaskManager
+2. Create  and run Supervisor
+3. Create and return engine
 
 #### Sync Engine Run & Serve
 
-1. create a mpsc channel for sync engine to receive command
-2. create a mpsc channel for the task manager
-3. create a mpsc channel for the worker pool
-4. store the sender side as field instance
-5. change into ready state
-6. Wait for the following command
+1. 
+2. store the sender side as field instance
+3. change into ready state
+4. Wait for the following command
    1. Add a sync plan
    2. Add a list of sync plans
    3. Run a sync plan given its id
@@ -102,7 +100,7 @@
 
 1. The new sync plan is passed to the sync engine via a command payload
 2. create a oneshot channel for the task manager
-3. wrap the sync plan in an command tuple (TaskManagerCommand::BatchAddSyncPlan, Vec`<SyncPlan>`, ResponseSender) and send the command to the task manager
+3. wrap the sync plan in an command tuple (TaskManagerCommand::BatchAddSyncPlan, Vec `<SyncPlan>`, ResponseSender) and send the command to the task manager
 4. wait for response
    1. If ok
       1. log and return ok status
@@ -110,8 +108,6 @@
       1. log and return error message
 
 #### Run a sync plan by id
-
-1. 
 
 #### SyncPlan Execution
 
@@ -138,7 +134,6 @@
 3. **Notification** : The `SyncEngine` notifies client modules of any errors.
 4. **Recovery** : If possible, the `SyncEngine` attempts to recover from errors and resume operations.
 5. **Escalation** : Unrecoverable errors are escalated for manual intervention.
-
 
 ### Detailed Design
 

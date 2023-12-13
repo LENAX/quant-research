@@ -1,32 +1,34 @@
 //! TaskManager Related Commands
 //! 
 
-use std::sync::Arc;
-
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::{infrastructure::sync_engine::message::ControlMessage, domain::synchronization::sync_plan::SyncPlan};
+use crate::{infrastructure::sync_engine::{message::ControlMessage, engine::commands::Plan}, domain::synchronization::{sync_plan::SyncPlan, value_objects::task_spec::TaskSpecification}};
 
 type PlanId = Uuid;
 
 #[derive(Debug)]
-pub enum SyncControl {
-    StartAll,
-    PauseAll,
-    ResumeAll,
-    StopAll,
-    Start(PlanId),
-    Pause(PlanId),
-    Resume(PlanId),
-    Stop(PlanId),
-    AddPlan(Arc<Mutex<SyncPlan>>),
-    RemovePlan(PlanId)
-}
-
-
-#[derive(Debug)]
 pub enum TaskManagerCommand {
-    LifecycleControl(ControlMessage),
-    SyncControl(SyncControl),
+    // Lifecycle Control
+    Shutdown,
+    
+    // Task Control
+    AddPlan(Plan),
+    RemovePlan(PlanId),
+    RequestTask(PlanId),
+
 }
+
+#[derive(Debug, Clone)]
+pub enum TaskManagerResponse {
+    // Lifecycle Control Responses
+    ShutdownComplete,
+
+    // Task Control Responses
+    PlanAdded { plan_id: Uuid },
+    PlanRemoved { plan_id: Uuid },
+    Error { message: String }, // General error response
+    // Additional responses as needed...
+}
+
+// TODO: Separate Task Sending from other command response

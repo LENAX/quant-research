@@ -15,3 +15,10 @@ pub mod engine;
 pub mod task_manager;
 pub mod worker;
 pub mod message;
+
+#[derive(Debug)]
+pub enum ComponentState {
+    Created,
+    Running,
+    Stopped
+}

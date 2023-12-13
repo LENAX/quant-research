@@ -1,9 +1,12 @@
 //! TaskManager Related Commands
 //! 
 
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::{infrastructure::sync_engine::{message::ControlMessage, engine::commands::Plan}, domain::synchronization::{sync_plan::SyncPlan, value_objects::task_spec::TaskSpecification}};
+use crate::{infrastructure::sync_engine::engine::commands::Plan};
+
+use super::task_manager::Task;
 
 type PlanId = Uuid;
 
@@ -16,7 +19,7 @@ pub enum TaskManagerCommand {
     AddPlan(Plan),
     RemovePlan(PlanId),
     RequestTask(PlanId),
-
+    RequestTaskReceiver{ plan_id: Uuid }
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +32,14 @@ pub enum TaskManagerResponse {
     PlanRemoved { plan_id: Uuid },
     Error { message: String }, // General error response
     // Additional responses as needed...
+    // subscribe to sender to get the receiver
+    TaskChannel{ plan_id: Uuid, task_sender: broadcast::Sender<TaskRequestResponse> }
 }
 
 // TODO: Separate Task Sending from other command response
+#[derive(Debug, Clone)]
+pub enum TaskRequestResponse {
+    NewTask(Task),
+    NoTaskLeft,
+    PlanNotFound(Uuid)
+}

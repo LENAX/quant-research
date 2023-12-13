@@ -1,6 +1,9 @@
 use chrono::{DateTime, Local};
 use serde_json::Value;
+use tokio::sync::broadcast;
 use uuid::Uuid;
+
+use crate::infrastructure::sync_engine::task_manager::commands::TaskRequestResponse;
 
 #[derive(Debug)]
 pub enum SupervisorCommand {
@@ -9,7 +12,6 @@ pub enum SupervisorCommand {
     CancelPlan(Uuid),
     StartAll,
     CancelAll,
-
     // TODO: Worker Management
     // AddWorker(usize),
     // DestroyWorker(usize)
@@ -36,7 +38,7 @@ pub enum SupervisorResponse {
 #[derive(Debug)]
 pub enum WorkerCommand {
     Shutdown,
-    AssignPlan(Uuid),
+    AssignPlan { plan_id: Uuid, task_receiver: broadcast::Receiver<TaskRequestResponse>, start_immediately: bool },
     CancelPlan(Uuid),
     CheckStatus,
 }

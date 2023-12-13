@@ -10,8 +10,10 @@ use crate::{infrastructure::sync_engine::message::ControlMessage, domain::synchr
 
 type PlanId = Uuid;
 
+
 #[derive(Debug)]
-pub enum SyncControl {
+pub enum TaskManagerCommand {
+    LifecycleControl(ControlMessage),
     StartAll,
     PauseAll,
     ResumeAll,
@@ -21,12 +23,7 @@ pub enum SyncControl {
     Resume(PlanId),
     Stop(PlanId),
     AddPlan(Arc<Mutex<SyncPlan>>),
-    RemovePlan(PlanId)
-}
-
-
-#[derive(Debug)]
-pub enum TaskManagerCommand {
-    LifecycleControl(ControlMessage),
-    SyncControl(SyncControl),
+    GetPlan(PlanId),
+    GetNextTask(Uuid),
+    RemovePlan(PlanId),
 }

@@ -123,6 +123,16 @@ impl Supervisor {
                         .await;
                 }
                 SupervisorCommand::StartAll => {
+                    // Assume the engine starts from the fresh stage
+                    // Are there any other state should be considered?
+
+                    // StartAll command prepares the engine into syncing state
+                    // Assume the engine start from the fresh stage
+                    // then:
+                    // 1. engine iterate all the plans need sync
+                    // 2. request task manager for task receivers
+                    // 3. find available workers and assign plans to them along with the corresponding task receivers
+
                     let mut tasks = Vec::new();
                     let worker_cmd_tx_ref = Arc::new(self.worker_cmd_tx.clone());
 
@@ -149,8 +159,11 @@ impl Supervisor {
                                         // Find an available worker to assign this plan
                                         if let Some((worker_id, worker_tx)) = worker_cmd_tx_ref_clone.iter().find(|&(_id, _tx)| {
                                             // Implement logic to select a suitable worker
+                                            // TODO: Send message to ask for availability, or just use worker_assignment to find a free worker.
                                             true // Placeholder, replace with actual logic
                                         }) {
+                                            // record worker assignment
+                                            // self.worker_assignment.insert(*worker_id, Some(plan_id));
                                             // Assign the plan and the task_receiver to the selected worker
                                             let _ = worker_tx.send(WorkerCommand::AssignPlan { plan_id, task_receiver, start_immediately: true }).await;
                                         }

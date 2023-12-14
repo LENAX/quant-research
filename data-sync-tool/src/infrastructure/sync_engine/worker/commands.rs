@@ -43,9 +43,13 @@ pub enum WorkerCommand {
     CheckStatus,
 }
 
+type WorkerId = Uuid;
+type PlanId = Uuid;
+
 #[derive(Debug)]
 pub enum WorkerResponse {
-    ShutdownComplete,
+    ShutdownComplete(WorkerId),
+    PlanAssignmentConfirmed { worker_id: WorkerId, plan_id: PlanId }
 }
 
 // Multiple workers will send result through an mpsc channel 

@@ -24,6 +24,11 @@ use super::{
 type WorkerId = Uuid;
 type PlanId = Uuid;
 
+#[derive(Debug)]
+pub enum SupervisorError {
+    WorkerFailedToSpawn(String)
+}
+
 #[derive(Debug, Getters)]
 #[getset(get = "pub")]
 pub struct Supervisor {
@@ -33,18 +38,37 @@ pub struct Supervisor {
     task_manager_resp_rx: broadcast::Receiver<TaskManagerResponse>,
     worker_cmd_tx: HashMap<WorkerId, mpsc::Sender<WorkerCommand>>,
     worker_resp_rx: mpsc::Receiver<WorkerResponse>,
+    worker_result_tx: mpsc::Sender<WorkerResult>,
     plans_to_sync: HashSet<Uuid>,
     worker_assignment: HashMap<WorkerId, Option<PlanId>>,
     state: ComponentState,
 }
 
 impl Supervisor {
+    
+    fn spawn_worker(
+        worker_resp_tx: mpsc::Sender<WorkerResponse>,
+        result_tx: mpsc::Sender<WorkerResult>,
+        task_rx: broadcast::Receiver<TaskManagerResponse>,
+    ) -> (WorkerId, mpsc::Sender<WorkerCommand>) {
+        let (tx, rx) = mpsc::channel(32);
+        let worker_id = WorkerId::new_v4(); // Generate or assign a unique WorkerId
+        let _ = tokio::spawn(async move {
+                let worker = Worker::new(
+                    worker_id, rx, task_rx, worker_resp_tx, result_tx
+                );
+                info!("Worker {} created!", worker_id);
+                worker.run().await;
+            });
+        return (worker_id, tx);
+    }
+
     pub fn new(
         n_workers: usize,
         task_manager_cmd_tx: mpsc::Sender<TaskManagerCommand>,
         task_manager_resp_rx: broadcast::Receiver<TaskManagerResponse>,
         task_rx: broadcast::Receiver<TaskManagerResponse>,
-        result_tx: mpsc::Sender<WorkerResult>,
+        worker_result_tx: mpsc::Sender<WorkerResult>,
     ) -> (
         Self,
         mpsc::Sender<SupervisorCommand>,
@@ -58,22 +82,11 @@ impl Supervisor {
         let mut worker_assignment = HashMap::new();
 
         for _ in 0..n_workers {
-            let (tx, rx) = mpsc::channel(32);
-            let worker_id = WorkerId::new_v4(); // Generate or assign a unique WorkerId
-            let worker_resp_tx_clone = worker_resp_tx.clone();
-            let result_tx_clone = result_tx.clone();
-            let task_rx_clone = task_rx.resubscribe();
+            let (worker_id, tx) = Supervisor::spawn_worker(
+                worker_resp_tx.clone(), worker_result_tx.clone(), task_rx.resubscribe()
+            );
+
             worker_assignment.insert(worker_id, None);
-
-            // Spawn a new worker - Implement this according to your worker logic
-            let _ = tokio::spawn(async move {
-                let worker = Worker::new(
-                    worker_id, rx, task_rx_clone, worker_resp_tx_clone, result_tx_clone
-                );
-                info!("Worker {} created!", worker_id);
-                worker.run().await;
-            });
-
             worker_cmd_tx.insert(worker_id, tx);
         }
 
@@ -85,6 +98,7 @@ impl Supervisor {
                 task_manager_resp_rx,
                 worker_cmd_tx,
                 worker_resp_rx,
+                worker_result_tx,
                 plans_to_sync: HashSet::new(),
                 worker_assignment,
                 state: ComponentState::Created,
@@ -127,8 +141,35 @@ impl Supervisor {
                             break;
                         }
                         SupervisorCommand::AssignPlan(plan_id) => {
-                            // Assign the plan to a worker...
+                            // Register new plan
                             self.plans_to_sync.insert(plan_id);
+
+                            // Find an idle worker
+                            let worker_id = {
+                                self.worker_assignment.iter_mut().find_map(|(id, pid)| {
+                                    if pid.is_none() {
+                                        *pid = Some(plan_id);
+                                        Some(*id)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            };
+
+                            // if no worker is available, spawn a new worker
+                            match worker_id {
+                                Some(wid) => {
+                                    todo!()
+                                },
+                                None => {
+                                    let (worker_resp_tx, worker_resp_rx) = mpsc::channel(32);
+                                    let (worker_id, worker_cmd_tx) = Supervisor::spawn_worker(
+                                        worker_resp_tx, self.worker_result_tx.clone(), self.task_manager_resp_rx.resubscribe()
+                                    );
+                                }
+                            }
+                            // Otherwise assign the plan to a worker...
+
                             let _ = self
                                 .resp_tx
                                 .send(SupervisorResponse::PlanAssigned { plan_id })

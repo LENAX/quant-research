@@ -27,6 +27,7 @@ pub enum SupervisorResponse {
         plan_id: Uuid,
     },
     PlanCancelled {
+        worker_id: WorkerId,
         plan_id: Uuid,
     },
     AllStarted,
@@ -55,7 +56,7 @@ pub enum WorkerResponse {
     PlanAssigned { worker_id: WorkerId, plan_id: PlanId, sync_started: bool },
     PlanCancelled { worker_id: WorkerId, plan_id: PlanId },
     StartOk { worker_id: WorkerId, plan_id: PlanId },
-    StartFailed(String)
+    StartFailed { worker_id: WorkerId, reason: String }
 }
 
 // Multiple workers will send result through an mpsc channel 

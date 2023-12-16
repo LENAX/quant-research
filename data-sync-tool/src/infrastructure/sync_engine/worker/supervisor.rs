@@ -121,176 +121,234 @@ impl Supervisor {
                 Some(command) = self.cmd_rx.recv() => {
                     match command {
                         SupervisorCommand::Shutdown => {
-                            // Perform shutdown logic...
-                            info!("Received shutdown command.");
-                            info!("Shutting down Workers...");
-                            let mut tasks = Vec::new();
-                            for (wid, worker_cmd_tx) in self.worker_cmd_tx.into_iter() {
-                                let worker_cmd_tx_clone = worker_cmd_tx.clone();
-                                let task = tokio::spawn(async move {
-                                    if let Err(e) = worker_cmd_tx_clone.send(WorkerCommand::Shutdown).await {
-                                        error!("Failed to shutdown worker {}, Error: {}", wid, e);
-                                    }
-                                });
-                                tasks.push(task);
-                            }
-
-                            let _ = futures::future::join_all(tasks).await;
-                            info!("Waiting for all workers to shutdown...");
-                            while self.worker_assignment.len() > 0 {
-                                sleep(Duration::from_millis(100)).await;
-                            }
-
-                            info!("Shutting down Supervisor...");
-                            self.state = ComponentState::Stopped;
-                            let _ = self
-                                .resp_tx
-                                .send(SupervisorResponse::ShutdownComplete)
-                                .await;
-                            break;
-                        }
+                            self.handle_shutdown().await;
+                        },
                         SupervisorCommand::AssignPlan { plan_id, start_immediately } => {
-                            // Register new plan
-                            // self.plans_to_sync.insert(plan_id);
-
-                            // Find an idle worker and update its state
-                            let worker_id = {
-                                self.worker_assignment.iter_mut().find_map(|(id, state)| {
-                                    if *state == WorkerAssignmentState::Idle {
-                                        *state = WorkerAssignmentState::Ready;
-                                        Some(*id)
-                                    } else {
-                                        None
-                                    }
-                                })
-                            };
-
-                            // if no worker is available, spawn a new worker
-                            let mut new_worker_id = Uuid::new_v4();
-                            if worker_id.is_none() {
-                                let (worker_id, worker_cmd_tx) = Supervisor::spawn_worker(
-                                        self.worker_resp_tx.clone(), 
-                                        self.worker_result_tx.clone(), 
-                                        self.task_manager_resp_rx.resubscribe()
-                                    );
-                                // register new worker
-                                self.worker_cmd_tx.insert(worker_id, worker_cmd_tx);
-                                self.worker_assignment.insert(worker_id, WorkerAssignmentState::Ready);
-                                new_worker_id = worker_id;
-                                debug!("Registered new worker {}", worker_id);
-                            }
-
-                            // assign the plan to a worker...
-                            let worker_cmd_sender_result = self.worker_cmd_tx.get(&worker_id.unwrap_or(new_worker_id));
-                            if let Some(worker_cmd_sender) = worker_cmd_sender_result {
-                                info!("Requesting task receiver...");
-                                let _ = self.task_manager_cmd_tx.send(TaskManagerCommand::RequestTaskReceiver { plan_id }).await;
-                                if let Ok(response) = self.task_manager_resp_rx.recv().await {
-                                    if let TaskManagerResponse::TaskChannel { plan_id: received_plan_id, task_sender } = response {
-                                        if received_plan_id == plan_id {
-                                            let task_receiver = task_sender.subscribe();
-                                            let send_result = worker_cmd_sender.send(WorkerCommand::AssignPlan {
-                                                plan_id: plan_id, task_receiver: task_receiver, start_immediately
-                                            }).await;
-                                            if let Err(e) = send_result {
-                                                error!("Failed to send command to worker {}: {}", &worker_id.unwrap_or(new_worker_id), e);
-                                            }
-                                        }
-                                    }
-                                }   
-                            }
-
-                            let _ = self
-                                .resp_tx
-                                .send(SupervisorResponse::PlanAssigned { plan_id })
-                                .await;
-                        }
+                            self.handle_assign_plan(plan_id, start_immediately).await;
+                        },
                         SupervisorCommand::CancelPlan(plan_id) => {
-                            // Cancel the plan...
-                            self.plans_to_sync.remove(&plan_id);
-                            let _ = self
-                                .resp_tx
-                                .send(SupervisorResponse::PlanCancelled { plan_id })
-                                .await;
-                        }
+                            self.handle_cancel_plan(plan_id).await;
+                        },
                         SupervisorCommand::StartAll => {
-                            // Instruct Workers to Start Syncing All Plans
-        
-                            let mut tasks = Vec::new();
-                            let worker_cmd_tx_ref = &self.worker_cmd_tx;
-
-                            for (&worker_id, state) in self.worker_assignment.iter() {
-                                if matches!(state, WorkerAssignmentState::PlanAssigned(_)) {
-                                    let worker_cmd_sender = worker_cmd_tx_ref.get(&worker_id);
-                                    match worker_cmd_sender {
-                                        Some(sender) => {
-                                            let sender_clone = sender.clone();
-                                            let task = tokio::spawn(async move {
-                                                let send_result = sender_clone.send(WorkerCommand::StartSync).await;
-                                                if let Err(_) = send_result {
-                                                    error!("Failed to send start command to worker {}", &worker_id);
-                                                }
-                                            });
-                                            tasks.push(task);
-                                        },
-                                        None => {
-                                            error!("Worker command sender not found!")
-                                        }
-                                    }
-                                }
-                            }
-        
-                            // Wait for all tasks to finish
-                            let _ = futures::future::join_all(tasks).await;
-                            // Notify that all plans have been instructed to start
-                            let _ = self.resp_tx.send(SupervisorResponse::AllStarted).await;
-                        }
+                            self.handle_start_all().await;
+                        },
                         SupervisorCommand::CancelAll => {
-                            // Logic to cancel all plans...
-                            let _ = self.resp_tx.send(SupervisorResponse::AllCancelled).await;
-                        } // TODO: Implement worker management commands
+                            self.handle_cancel_all().await;
+                        }
                     }
                 },
                 Some(worker_response) = self.worker_resp_rx.recv() => {
-                    // Handle worker responses
-                    match worker_response {
-                        WorkerResponse::ShutdownComplete(worker_id) => {
-                            // Process task completion
-                            // need to confirm worker is down
-                            info!("Worker {} is down.", worker_id);
-
-                            // Remove it from worker assignment map
-                            self.worker_assignment.remove(&worker_id);
-                        },
-                        WorkerResponse::PlanAssigned { worker_id, plan_id, sync_started } => {
-                            // Handle task failure
-                            info!("Successfully assigned plan {} to worker {}.", plan_id, worker_id);
-                            if sync_started {
-                                self.worker_assignment.insert(worker_id, WorkerAssignmentState::Running(plan_id));
-                            } else {
-                                self.worker_assignment.insert(worker_id, WorkerAssignmentState::PlanAssigned(plan_id));
-                            }
-                            
-                        },
-                        WorkerResponse::PlanCancelled { worker_id, plan_id } => {
-                            todo!()
-                        },
-                        WorkerResponse::StartOk { worker_id, plan_id } => {
-                            info!("Worker {} is syncing plan {}", worker_id, plan_id);
-                            let worker_state = self.worker_assignment.get_mut(&worker_id);
-                            if let Some(worker_state) = worker_state {
-                                if *worker_state == WorkerAssignmentState::PlanAssigned(plan_id) {
-                                    *worker_state = WorkerAssignmentState::Running(plan_id);
-                                }
-                            }
-                        },
-                        WorkerResponse::StartFailed(reason) => {
-                            error!("Failed to start worker because {}", reason)
-                        }
-                        // ... handle other worker responses ...
-                    }
+                    self.handle_worker_response(worker_response).await;
                 }
             }
         }
     }
+
+    async fn handle_shutdown(&mut self) {
+        info!("Received shutdown command.");
+        info!("Shutting down Workers...");
+    
+        let mut tasks = Vec::new();
+        for (&worker_id, worker_tx) in self.worker_cmd_tx.iter() {
+            let worker_tx_clone = worker_tx.clone();
+            let worker_id_clone = worker_id; // Clone the worker_id
+    
+            let task = tokio::spawn(async move {
+                if let Err(e) = worker_tx_clone.send(WorkerCommand::Shutdown).await {
+                    error!("Failed to shutdown worker {}, Error: {}", worker_id_clone, e);
+                }
+            });
+            tasks.push(task);
+        }
+    
+        let _ = futures::future::join_all(tasks).await;
+        info!("Waiting for all workers to shutdown...");
+    
+        while self.worker_assignment.len() > 0 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    
+        info!("Shutting down Supervisor...");
+        self.state = ComponentState::Stopped;
+        let _ = self.resp_tx.send(SupervisorResponse::ShutdownComplete).await;
+    }
+    
+
+    async fn handle_assign_plan(&mut self, plan_id: Uuid, start_immediately: bool) {
+        // Register new plan
+        // self.plans_to_sync.insert(plan_id);
+    
+        let worker_id = self.worker_assignment.iter_mut().find_map(|(id, state)| {
+            if *state == WorkerAssignmentState::Idle {
+                *state = WorkerAssignmentState::Ready;
+                Some(*id)
+            } else {
+                None
+            }
+        });
+    
+        if let Some(worker_id) = worker_id {
+            self.assign_plan_to_worker(worker_id, plan_id, start_immediately).await;
+        } else {
+            // If no worker is available, consider handling it (e.g., logging, spawning a new worker, etc.)
+            error!("No available worker for plan {}", plan_id);
+        }
+    }
+
+    async fn handle_cancel_plan(&mut self, plan_id: Uuid) {
+        info!("Cancelling plan {}...", plan_id);
+    
+        let worker_id = self.worker_assignment.iter().find_map(|(id, state)| {
+            if *state == WorkerAssignmentState::Running(plan_id) || *state == WorkerAssignmentState::PlanAssigned(plan_id) {
+                Some(*id)
+            } else {
+                None
+            }
+        });
+    
+        if let Some(worker_id) = worker_id {
+            if let Some(sender) = self.worker_cmd_tx.get(&worker_id) {
+                if let Err(e) = sender.send(WorkerCommand::CancelPlan(plan_id)).await {
+                    error!("Failed to send cancel command to worker {}: {}", worker_id, e);
+                } else {
+                    info!("Plan cancellation command sent to worker {}", worker_id);
+                }
+            } else {
+                error!("Worker command sender not found for worker {}", worker_id);
+            }
+        } else {
+            error!("Worker not found for plan {}", plan_id);
+        }
+    }
+    
+    async fn handle_start_all(&mut self) {
+        let mut tasks = Vec::new();
+        for (&worker_id, state) in self.worker_assignment.iter() {
+            if matches!(state, WorkerAssignmentState::PlanAssigned(_)) {
+                if let Some(sender) = self.worker_cmd_tx.get(&worker_id) {
+                    let sender_clone = sender.clone();
+                    let task = tokio::spawn(async move {
+                        if let Err(e) = sender_clone.send(WorkerCommand::StartSync).await {
+                            error!("Failed to send start command to worker {}: {}", worker_id, e);
+                        }
+                    });
+                    tasks.push(task);
+                }
+            }
+        }
+    
+        let _ = futures::future::join_all(tasks).await;
+        let _ = self.resp_tx.send(SupervisorResponse::AllStarted).await;
+    }
+
+    async fn handle_cancel_all(&mut self) {
+        let mut tasks = Vec::new();
+        for (&worker_id, state) in self.worker_assignment.iter() {
+            if let WorkerAssignmentState::Running(plan_id) | WorkerAssignmentState::PlanAssigned(plan_id) = state {
+                if let Some(sender) = self.worker_cmd_tx.get(&worker_id) {
+                    let sender_clone = sender.clone();
+                    let plan_id_clone = *plan_id;
+                    let task = tokio::spawn(async move {
+                        if let Err(e) = sender_clone.send(WorkerCommand::CancelPlan(plan_id_clone)).await {
+                            error!("Failed to send cancel command for plan {} to worker {}: {}", plan_id_clone, worker_id, e);
+                        }
+                    });
+                    tasks.push(task);
+                }
+            }
+        }
+    
+        let _ = futures::future::join_all(tasks).await;
+        let _ = self.resp_tx.send(SupervisorResponse::AllCancelled).await;
+    }
+    
+
+    async fn handle_worker_response(&mut self, response: WorkerResponse) {
+        match response {
+            WorkerResponse::ShutdownComplete(worker_id) => {
+                // Process task completion
+                // need to confirm worker is down
+                info!("Worker {} is down.", worker_id);
+
+                // Remove it from worker assignment map
+                self.worker_assignment.remove(&worker_id);
+            },
+            WorkerResponse::PlanAssigned { worker_id, plan_id, sync_started } => {
+                // Handle task failure
+                info!("Successfully assigned plan {} to worker {}.", plan_id, worker_id);
+                if sync_started {
+                    self.worker_assignment.insert(worker_id, WorkerAssignmentState::Running(plan_id));
+                } else {
+                    self.worker_assignment.insert(worker_id, WorkerAssignmentState::PlanAssigned(plan_id));
+                }
+                let _ = self
+                    .resp_tx
+                    .send(SupervisorResponse::PlanAssigned { plan_id })
+                    .await;
+            },
+            WorkerResponse::PlanCancelled { worker_id, plan_id } => {
+                let worker_state = self.worker_assignment.get_mut(&worker_id);
+                if let Some(worker_state) = worker_state {
+                    if  matches!(worker_state, WorkerAssignmentState::PlanAssigned(_) | WorkerAssignmentState::Running(_)) {
+                        *worker_state = WorkerAssignmentState::Idle;
+                    }
+                }
+
+                info!("Successfully cancelled plan {} for worker {}.", plan_id, worker_id);
+                let _ = self
+                        .resp_tx
+                        .send(SupervisorResponse::PlanCancelled { worker_id, plan_id })
+                        .await;
+            },
+            WorkerResponse::StartOk { worker_id, plan_id } => {
+                info!("Worker {} is syncing plan {}", worker_id, plan_id);
+                let worker_state = self.worker_assignment.get_mut(&worker_id);
+                if let Some(worker_state) = worker_state {
+                    if *worker_state == WorkerAssignmentState::PlanAssigned(plan_id) {
+                        *worker_state = WorkerAssignmentState::Running(plan_id);
+                    }
+                }
+            },
+            WorkerResponse::StartFailed{ worker_id, reason } => {
+                error!("Failed to start worker {} because {}",worker_id, reason)
+            }
+            // ... handle other worker responses ...
+        }
+    
+        // Send a response to the client module if necessary
+        // For example, you might send a response for certain worker actions
+    }
+    
+    async fn assign_plan_to_worker(&mut self, worker_id: Uuid, plan_id: Uuid, start_immediately: bool) {
+        // Request the task receiver for the plan from the Task Manager
+        let _ = self.task_manager_cmd_tx.send(TaskManagerCommand::RequestTaskReceiver { plan_id }).await;
+    
+        // Await the response from the Task Manager
+        if let Ok(response) = self.task_manager_resp_rx.recv().await {
+            if let TaskManagerResponse::TaskChannel { plan_id: received_plan_id, task_sender } = response {
+                if received_plan_id == plan_id {
+                    let task_receiver = task_sender.subscribe();
+    
+                    // Send the AssignPlan command to the worker
+                    if let Some(worker_cmd_sender) = self.worker_cmd_tx.get(&worker_id) {
+                        let command = WorkerCommand::AssignPlan {
+                            plan_id,
+                            task_receiver,
+                            start_immediately
+                        };
+                        if let Err(e) = worker_cmd_sender.send(command).await {
+                            error!("Failed to send AssignPlan command to worker {}: {}", worker_id, e);
+                        } else {
+                            info!("Assigned plan {} to worker {}.", plan_id, worker_id);
+                        }
+                    } else {
+                        error!("Worker command sender not found for worker {}", worker_id);
+                    }
+                }
+            }
+        } else {
+            error!("Failed to receive task channel from Task Manager for plan {}", plan_id);
+        }
+    }
+    
 }

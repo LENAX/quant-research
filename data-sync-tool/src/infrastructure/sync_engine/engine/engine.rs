@@ -89,11 +89,11 @@ impl SyncEngine {
                     info!("Shutdown command received!");
                     self.handle_shutdown().await;
                 },
-                EngineCommands::AddPlan(plan) => {
+                EngineCommands::AddPlan { plan, start_immediately} => {
                     info!("Add a new plan {}", plan.plan_id());
                     let plan_id = plan.plan_id().clone();
                     let _ = self.task_manager_tx.send(TaskManagerCommand::AddPlan(plan)).await;
-                    let _ = self.supervisor_tx.send(SupervisorCommand::AssignPlan(plan_id)).await;
+                    let _ = self.supervisor_tx.send(SupervisorCommand::AssignPlan { plan_id, start_immediately }).await;
                 },
                 EngineCommands::RemovePlan(plan_id) => {
                     info!("Remove a plan {}", plan_id);
@@ -141,7 +141,7 @@ impl SyncEngine {
                 // Handle plan assigned response...
                 info!("Assigned new plan {}", plan_id);
             },
-            SupervisorResponse::PlanCancelled { plan_id } => {
+            SupervisorResponse::PlanCancelled { plan_id, worker_id } => {
                 // Handle plan cancelled response...
                 info!("Cancelled plan {}", plan_id);
             },

@@ -25,7 +25,7 @@ pub enum ProgressManagement {
 #[derive(Debug)]
 pub enum EngineCommands {
     Shutdown,
-    AddPlan(Plan),
+    AddPlan { plan: Plan , start_immediately: bool },
     RemovePlan(Uuid),
     StartSync,
     CancelSync,

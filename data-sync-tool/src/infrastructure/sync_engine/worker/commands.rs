@@ -52,8 +52,9 @@ pub enum WorkerCommand {
 #[derive(Debug)]
 pub enum WorkerResponse {
     ShutdownComplete(WorkerId),
-    PlanAssignmentConfirmed { worker_id: WorkerId, plan_id: PlanId },
-    StartOk,
+    PlanAssigned { worker_id: WorkerId, plan_id: PlanId, sync_started: bool },
+    PlanCancelled { worker_id: WorkerId, plan_id: PlanId },
+    StartOk { worker_id: WorkerId, plan_id: PlanId },
     StartFailed(String)
 }
 

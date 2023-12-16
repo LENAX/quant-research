@@ -2,27 +2,34 @@
 //! Serve the role of managing and coordinating multiple workers
 //!
 
-use std::{collections::{HashMap, HashSet}, sync::Arc};
+use std::collections::{HashMap, HashSet};
 
 use getset::Getters;
-use itertools::Itertools;
 use log::{info, error, debug};
-use tokio::{sync::{broadcast, mpsc, Mutex}, select, time::{sleep, Duration}};
+use tokio::{sync::{broadcast, mpsc}, select, time::{sleep, Duration}};
 use uuid::Uuid;
 
-use crate::{infrastructure::sync_engine::{
+use crate::infrastructure::sync_engine::{
     task_manager::commands::{TaskManagerResponse, TaskManagerCommand}, ComponentState,
-}, application::synchronization::dtos::task_manager};
+};
 
 use super::{
     commands::{
         SupervisorCommand, SupervisorResponse, WorkerCommand, WorkerResponse, WorkerResult,
     },
-    worker::{Worker, self},
+    worker::Worker,
 };
 
 type WorkerId = Uuid;
 type PlanId = Uuid;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum WorkerAssignmentState {
+    Idle,
+    Ready, // Picked for plan assignment
+    PlanAssigned(PlanId),
+    Running(PlanId)
+}
 
 
 #[derive(Debug, Getters)]
@@ -37,7 +44,7 @@ pub struct Supervisor {
     worker_resp_rx: mpsc::Receiver<WorkerResponse>,
     worker_result_tx: mpsc::Sender<WorkerResult>,
     plans_to_sync: HashSet<Uuid>,
-    worker_assignment: HashMap<WorkerId, Option<PlanId>>,
+    worker_assignment: HashMap<WorkerId, WorkerAssignmentState>,
     state: ComponentState,
 }
 
@@ -66,7 +73,7 @@ impl Supervisor {
                 worker_resp_tx.clone(), worker_result_tx.clone(), task_rx.resubscribe()
             );
 
-            worker_assignment.insert(worker_id, None);
+            worker_assignment.insert(worker_id, WorkerAssignmentState::Idle);
             worker_cmd_tx.insert(worker_id, tx);
         }
 
@@ -142,15 +149,15 @@ impl Supervisor {
                                 .await;
                             break;
                         }
-                        SupervisorCommand::AssignPlan {plan_id, start_immediately } => {
+                        SupervisorCommand::AssignPlan { plan_id, start_immediately } => {
                             // Register new plan
-                            self.plans_to_sync.insert(plan_id);
+                            // self.plans_to_sync.insert(plan_id);
 
-                            // Find an idle worker
+                            // Find an idle worker and update its state
                             let worker_id = {
-                                self.worker_assignment.iter_mut().find_map(|(id, pid)| {
-                                    if pid.is_none() {
-                                        *pid = Some(plan_id);
+                                self.worker_assignment.iter_mut().find_map(|(id, state)| {
+                                    if *state == WorkerAssignmentState::Idle {
+                                        *state = WorkerAssignmentState::Ready;
                                         Some(*id)
                                     } else {
                                         None
@@ -168,7 +175,7 @@ impl Supervisor {
                                     );
                                 // register new worker
                                 self.worker_cmd_tx.insert(worker_id, worker_cmd_tx);
-                                self.worker_assignment.insert(worker_id, None);
+                                self.worker_assignment.insert(worker_id, WorkerAssignmentState::Ready);
                                 new_worker_id = worker_id;
                                 debug!("Registered new worker {}", worker_id);
                             }
@@ -207,46 +214,28 @@ impl Supervisor {
                                 .await;
                         }
                         SupervisorCommand::StartAll => {
-                            // Assume the engine starts from the fresh stage
-                            // Are there any other state should be considered?
-        
-                            // StartAll command prepares the engine into syncing state
-                            // Assume the engine start from the fresh stage
-                            // then:
-                            // 1. engine iterate all the plans need sync
-                            // 2. request task manager for task receivers
-                            // 3. find available workers and assign plans to them along with the corresponding task receivers
+                            // Instruct Workers to Start Syncing All Plans
         
                             let mut tasks = Vec::new();
                             let worker_cmd_tx_ref = &self.worker_cmd_tx;
 
-                            for &plan_id in &self.plans_to_sync {
-                                // Find an idle worker
-                                let worker_id = {
-                                    self.worker_assignment.iter_mut().find_map(|(id, pid)| {
-                                        if pid.is_none() {
-                                            *pid = Some(plan_id);
-                                            Some(*id)
-                                        } else {
-                                            None
+                            for (&worker_id, state) in self.worker_assignment.iter() {
+                                if matches!(state, WorkerAssignmentState::PlanAssigned(_)) {
+                                    let worker_cmd_sender = worker_cmd_tx_ref.get(&worker_id);
+                                    match worker_cmd_sender {
+                                        Some(sender) => {
+                                            let sender_clone = sender.clone();
+                                            let task = tokio::spawn(async move {
+                                                let send_result = sender_clone.send(WorkerCommand::StartSync).await;
+                                                if let Err(_) = send_result {
+                                                    error!("Failed to send start command to worker {}", &worker_id);
+                                                }
+                                            });
+                                            tasks.push(task);
+                                        },
+                                        None => {
+                                            error!("Worker command sender not found!")
                                         }
-                                    })
-                                };
-
-                                // Tell the worker to start syncing data
-                                if let Some(wid) = worker_id {
-                                    let worker_cmd_sender = worker_cmd_tx_ref.get(&wid);
-                                    if let Some(sender) = worker_cmd_sender {
-                                        let sender_clone = sender.clone();
-                                        let task = tokio::spawn(async move {
-                                            let send_result = sender_clone.send(WorkerCommand::StartSync).await;
-                                            if let Err(_) = send_result {
-                                                error!("Failed to send start command to worker {}", wid);
-                                            }
-                                        });
-                                        tasks.push(task);
-                                    } else {
-                                        error!("Worker command sender not found!")
                                     }
                                 }
                             }
@@ -273,13 +262,27 @@ impl Supervisor {
                             // Remove it from worker assignment map
                             self.worker_assignment.remove(&worker_id);
                         },
-                        WorkerResponse::PlanAssignmentConfirmed { worker_id, plan_id } => {
+                        WorkerResponse::PlanAssigned { worker_id, plan_id, sync_started } => {
                             // Handle task failure
                             info!("Successfully assigned plan {} to worker {}.", plan_id, worker_id);
-                            self.worker_assignment.insert(worker_id, Some(plan_id));
+                            if sync_started {
+                                self.worker_assignment.insert(worker_id, WorkerAssignmentState::Running(plan_id));
+                            } else {
+                                self.worker_assignment.insert(worker_id, WorkerAssignmentState::PlanAssigned(plan_id));
+                            }
+                            
                         },
-                        WorkerResponse::StartOk => {
+                        WorkerResponse::PlanCancelled { worker_id, plan_id } => {
                             todo!()
+                        },
+                        WorkerResponse::StartOk { worker_id, plan_id } => {
+                            info!("Worker {} is syncing plan {}", worker_id, plan_id);
+                            let worker_state = self.worker_assignment.get_mut(&worker_id);
+                            if let Some(worker_state) = worker_state {
+                                if *worker_state == WorkerAssignmentState::PlanAssigned(plan_id) {
+                                    *worker_state = WorkerAssignmentState::Running(plan_id);
+                                }
+                            }
                         },
                         WorkerResponse::StartFailed(reason) => {
                             error!("Failed to start worker because {}", reason)

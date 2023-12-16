@@ -5,10 +5,13 @@ use uuid::Uuid;
 
 use crate::infrastructure::sync_engine::task_manager::commands::TaskRequestResponse;
 
+type PlanId = Uuid;
+type WorkerId = Uuid;
+
 #[derive(Debug)]
 pub enum SupervisorCommand {
     Shutdown,
-    AssignPlan(Uuid),
+    AssignPlan { plan_id: PlanId , start_immediately: bool },
     CancelPlan(Uuid),
     StartAll,
     CancelAll,
@@ -39,17 +42,19 @@ pub enum SupervisorResponse {
 pub enum WorkerCommand {
     Shutdown,
     AssignPlan { plan_id: Uuid, task_receiver: broadcast::Receiver<TaskRequestResponse>, start_immediately: bool },
+    StartSync,
     CancelPlan(Uuid),
     CheckStatus,
 }
 
-type WorkerId = Uuid;
-type PlanId = Uuid;
+
 
 #[derive(Debug)]
 pub enum WorkerResponse {
     ShutdownComplete(WorkerId),
-    PlanAssignmentConfirmed { worker_id: WorkerId, plan_id: PlanId }
+    PlanAssignmentConfirmed { worker_id: WorkerId, plan_id: PlanId },
+    StartOk,
+    StartFailed(String)
 }
 
 // Multiple workers will send result through an mpsc channel 

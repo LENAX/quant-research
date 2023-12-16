@@ -6,8 +6,8 @@ use std::{collections::{HashMap, HashSet}, sync::Arc};
 
 use getset::Getters;
 use itertools::Itertools;
-use log::{info, error};
-use tokio::{sync::{broadcast, mpsc, Mutex}, select};
+use log::{info, error, debug};
+use tokio::{sync::{broadcast, mpsc, Mutex}, select, time::{sleep, Duration}};
 use uuid::Uuid;
 
 use crate::{infrastructure::sync_engine::{
@@ -24,10 +24,6 @@ use super::{
 type WorkerId = Uuid;
 type PlanId = Uuid;
 
-#[derive(Debug)]
-pub enum SupervisorError {
-    WorkerFailedToSpawn(String)
-}
 
 #[derive(Debug, Getters)]
 #[getset(get = "pub")]
@@ -37,6 +33,7 @@ pub struct Supervisor {
     task_manager_cmd_tx: mpsc::Sender<TaskManagerCommand>,
     task_manager_resp_rx: broadcast::Receiver<TaskManagerResponse>,
     worker_cmd_tx: HashMap<WorkerId, mpsc::Sender<WorkerCommand>>,
+    worker_resp_tx: mpsc::Sender<WorkerResponse>,
     worker_resp_rx: mpsc::Receiver<WorkerResponse>,
     worker_result_tx: mpsc::Sender<WorkerResult>,
     plans_to_sync: HashSet<Uuid>,
@@ -46,23 +43,6 @@ pub struct Supervisor {
 
 impl Supervisor {
     
-    fn spawn_worker(
-        worker_resp_tx: mpsc::Sender<WorkerResponse>,
-        result_tx: mpsc::Sender<WorkerResult>,
-        task_rx: broadcast::Receiver<TaskManagerResponse>,
-    ) -> (WorkerId, mpsc::Sender<WorkerCommand>) {
-        let (tx, rx) = mpsc::channel(32);
-        let worker_id = WorkerId::new_v4(); // Generate or assign a unique WorkerId
-        let _ = tokio::spawn(async move {
-                let worker = Worker::new(
-                    worker_id, rx, task_rx, worker_resp_tx, result_tx
-                );
-                info!("Worker {} created!", worker_id);
-                worker.run().await;
-            });
-        return (worker_id, tx);
-    }
-
     pub fn new(
         n_workers: usize,
         task_manager_cmd_tx: mpsc::Sender<TaskManagerCommand>,
@@ -97,6 +77,7 @@ impl Supervisor {
                 task_manager_cmd_tx,
                 task_manager_resp_rx,
                 worker_cmd_tx,
+                worker_resp_tx,
                 worker_resp_rx,
                 worker_result_tx,
                 plans_to_sync: HashSet::new(),
@@ -106,6 +87,23 @@ impl Supervisor {
             cmd_tx,
             resp_rx,
         )
+    }
+
+    fn spawn_worker(
+        worker_resp_tx: mpsc::Sender<WorkerResponse>,
+        result_tx: mpsc::Sender<WorkerResult>,
+        task_rx: broadcast::Receiver<TaskManagerResponse>,
+    ) -> (WorkerId, mpsc::Sender<WorkerCommand>) {
+        let (tx, rx) = mpsc::channel(32);
+        let worker_id = WorkerId::new_v4(); // Generate or assign a unique WorkerId
+        let _ = tokio::spawn(async move {
+                let worker = Worker::new(
+                    worker_id, rx, task_rx, worker_resp_tx, result_tx
+                );
+                info!("Worker {} created!", worker_id);
+                worker.run().await;
+            });
+        return (worker_id, tx);
     }
 
     pub async fn run(mut self) {
@@ -129,8 +127,12 @@ impl Supervisor {
                                 });
                                 tasks.push(task);
                             }
-                            info!("Waiting for all workers to shutdown...");
+
                             let _ = futures::future::join_all(tasks).await;
+                            info!("Waiting for all workers to shutdown...");
+                            while self.worker_assignment.len() > 0 {
+                                sleep(Duration::from_millis(100)).await;
+                            }
 
                             info!("Shutting down Supervisor...");
                             self.state = ComponentState::Stopped;
@@ -140,7 +142,7 @@ impl Supervisor {
                                 .await;
                             break;
                         }
-                        SupervisorCommand::AssignPlan(plan_id) => {
+                        SupervisorCommand::AssignPlan {plan_id, start_immediately } => {
                             // Register new plan
                             self.plans_to_sync.insert(plan_id);
 
@@ -157,18 +159,39 @@ impl Supervisor {
                             };
 
                             // if no worker is available, spawn a new worker
-                            match worker_id {
-                                Some(wid) => {
-                                    todo!()
-                                },
-                                None => {
-                                    let (worker_resp_tx, worker_resp_rx) = mpsc::channel(32);
-                                    let (worker_id, worker_cmd_tx) = Supervisor::spawn_worker(
-                                        worker_resp_tx, self.worker_result_tx.clone(), self.task_manager_resp_rx.resubscribe()
+                            let mut new_worker_id = Uuid::new_v4();
+                            if worker_id.is_none() {
+                                let (worker_id, worker_cmd_tx) = Supervisor::spawn_worker(
+                                        self.worker_resp_tx.clone(), 
+                                        self.worker_result_tx.clone(), 
+                                        self.task_manager_resp_rx.resubscribe()
                                     );
-                                }
+                                // register new worker
+                                self.worker_cmd_tx.insert(worker_id, worker_cmd_tx);
+                                self.worker_assignment.insert(worker_id, None);
+                                new_worker_id = worker_id;
+                                debug!("Registered new worker {}", worker_id);
                             }
-                            // Otherwise assign the plan to a worker...
+
+                            // assign the plan to a worker...
+                            let worker_cmd_sender_result = self.worker_cmd_tx.get(&worker_id.unwrap_or(new_worker_id));
+                            if let Some(worker_cmd_sender) = worker_cmd_sender_result {
+                                info!("Requesting task receiver...");
+                                let _ = self.task_manager_cmd_tx.send(TaskManagerCommand::RequestTaskReceiver { plan_id }).await;
+                                if let Ok(response) = self.task_manager_resp_rx.recv().await {
+                                    if let TaskManagerResponse::TaskChannel { plan_id: received_plan_id, task_sender } = response {
+                                        if received_plan_id == plan_id {
+                                            let task_receiver = task_sender.subscribe();
+                                            let send_result = worker_cmd_sender.send(WorkerCommand::AssignPlan {
+                                                plan_id: plan_id, task_receiver: task_receiver, start_immediately
+                                            }).await;
+                                            if let Err(e) = send_result {
+                                                error!("Failed to send command to worker {}: {}", &worker_id.unwrap_or(new_worker_id), e);
+                                            }
+                                        }
+                                    }
+                                }   
+                            }
 
                             let _ = self
                                 .resp_tx
@@ -195,69 +218,41 @@ impl Supervisor {
                             // 3. find available workers and assign plans to them along with the corresponding task receivers
         
                             let mut tasks = Vec::new();
-                            let worker_cmd_tx_ref = Arc::new(self.worker_cmd_tx.clone());
-        
-                            // reference to worker_assignment hashmap
-                            let worker_assignment_ref = Arc::new(Mutex::new(self.worker_assignment.clone()));
-                            // TODO: Assign plan to worker
-        
+                            let worker_cmd_tx_ref = &self.worker_cmd_tx;
+
                             for &plan_id in &self.plans_to_sync {
-                                let task_manager_cmd_tx = self.task_manager_cmd_tx.clone();
-                                let worker_cmd_tx_ref_clone = Arc::clone(&worker_cmd_tx_ref);
-                                let worker_assignment_ref_clone = Arc::clone(&worker_assignment_ref);
-                                
-                                // Clone the receiver for each task
-                                let mut task_manager_resp_rx = self.task_manager_resp_rx.resubscribe();
-        
-                                // Spawn an async block for each plan
-                                let task = tokio::spawn(async move {
-                                    // Request task_receiver for this plan from TaskManager
-                                    let _ = task_manager_cmd_tx.send(TaskManagerCommand::RequestTaskReceiver { plan_id }).await;
-        
-                                    // Process response from TaskManager
-                                    if let Ok(response) = task_manager_resp_rx.recv().await {
-                                        if let TaskManagerResponse::TaskChannel { plan_id: received_plan_id, task_sender } = response {
-                                            if received_plan_id == plan_id {
-                                                let task_receiver = task_sender.subscribe();
-                        
-                                                // First, determine the suitable worker
-                                                let worker_id = {
-                                                    let mut worker_assignment = worker_assignment_ref_clone.lock().await;
-                                                    worker_assignment.iter_mut().find_map(|(id, pid)| {
-                                                        if pid.is_none() {
-                                                            *pid = Some(plan_id);
-                                                            Some(*id)
-                                                        } else {
-                                                            None
-                                                        }
-                                                    })
-                                                };
-                        
-                                                // Then, send the command to the selected worker
-                                                if let Some(id) = worker_id {
-                                                    if let Some(worker_tx) = worker_cmd_tx_ref_clone.get(&id) {
-                                                        let r = worker_tx.send(WorkerCommand::AssignPlan { plan_id, task_receiver, start_immediately: true }).await;
-                                                        if let Err(e) = r {
-                                                            error!("Failed to send command {}", e);
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                // Find an idle worker
+                                let worker_id = {
+                                    self.worker_assignment.iter_mut().find_map(|(id, pid)| {
+                                        if pid.is_none() {
+                                            *pid = Some(plan_id);
+                                            Some(*id)
+                                        } else {
+                                            None
                                         }
+                                    })
+                                };
+
+                                // Tell the worker to start syncing data
+                                if let Some(wid) = worker_id {
+                                    let worker_cmd_sender = worker_cmd_tx_ref.get(&wid);
+                                    if let Some(sender) = worker_cmd_sender {
+                                        let sender_clone = sender.clone();
+                                        let task = tokio::spawn(async move {
+                                            let send_result = sender_clone.send(WorkerCommand::StartSync).await;
+                                            if let Err(_) = send_result {
+                                                error!("Failed to send start command to worker {}", wid);
+                                            }
+                                        });
+                                        tasks.push(task);
+                                    } else {
+                                        error!("Worker command sender not found!")
                                     }
-                                });
-        
-                                tasks.push(task);
+                                }
                             }
         
                             // Wait for all tasks to finish
                             let _ = futures::future::join_all(tasks).await;
-                            // Synchronize the changes back to Supervisor's worker_assignment
-                            let updated_worker_assignment = Arc::try_unwrap(worker_assignment_ref)
-                                .expect("Arc::try_unwrap failed")
-                                .into_inner();
-                            self.worker_assignment = updated_worker_assignment;
-                        
                             // Notify that all plans have been instructed to start
                             let _ = self.resp_tx.send(SupervisorResponse::AllStarted).await;
                         }
@@ -272,13 +267,23 @@ impl Supervisor {
                     match worker_response {
                         WorkerResponse::ShutdownComplete(worker_id) => {
                             // Process task completion
-                            // ...
+                            // need to confirm worker is down
                             info!("Worker {} is down.", worker_id);
+
+                            // Remove it from worker assignment map
+                            self.worker_assignment.remove(&worker_id);
                         },
                         WorkerResponse::PlanAssignmentConfirmed { worker_id, plan_id } => {
                             // Handle task failure
                             info!("Successfully assigned plan {} to worker {}.", plan_id, worker_id);
+                            self.worker_assignment.insert(worker_id, Some(plan_id));
                         },
+                        WorkerResponse::StartOk => {
+                            todo!()
+                        },
+                        WorkerResponse::StartFailed(reason) => {
+                            error!("Failed to start worker because {}", reason)
+                        }
                         // ... handle other worker responses ...
                     }
                 }

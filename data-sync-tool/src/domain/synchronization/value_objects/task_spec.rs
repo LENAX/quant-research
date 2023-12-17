@@ -7,8 +7,10 @@ use std::{
 
 use derivative::Derivative;
 use getset::{Getters, Setters};
+use reqwest::{RequestBuilder, Client, header::{HeaderMap, HeaderName, HeaderValue}, Method};
 use serde_json::Value;
 use url::Url;
+use serde_qs;
 
 use crate::domain::synchronization::{
     custom_errors::RequestMethodParsingError, sync_plan::CreateTaskRequest,
@@ -21,7 +23,7 @@ pub enum RequestMethod {
     #[derivative(Default)]
     Get,
     Post,
-    Websocket,
+    // Websocket,
 }
 
 impl FromStr for RequestMethod {
@@ -35,9 +37,9 @@ impl FromStr for RequestMethod {
             "Post" => Ok(RequestMethod::Post),
             "post" => Ok(RequestMethod::Post),
             "POST" => Ok(RequestMethod::Post),
-            "Websocket" => Ok(RequestMethod::Websocket),
-            "websocket" => Ok(RequestMethod::Websocket),
-            "ws" => Ok(RequestMethod::Websocket),
+            // "Websocket" => Ok(RequestMethod::Websocket),
+            // "websocket" => Ok(RequestMethod::Websocket),
+            // "ws" => Ok(RequestMethod::Websocket),
             _ => Err(RequestMethodParsingError),
         }
     }
@@ -49,7 +51,7 @@ pub struct TaskSpecification {
     request_endpoint: Url,
     request_method: RequestMethod,
     request_header: HashMap<String, String>,
-    payload: Option<Arc<Value>>,
+    payload: Option<Value>,
 }
 
 impl Default for TaskSpecification {
@@ -79,7 +81,7 @@ impl TaskSpecification {
         url: &str,
         request_method: &str,
         request_header: HashMap<String, String>,
-        payload: Option<Arc<Value>>,
+        payload: Option<Value>,
     ) -> Result<Self, Box<dyn Error>> {
         let parsed_url = Url::parse(url)?;
         let request_method = RequestMethod::from_str(request_method)?;
@@ -90,6 +92,66 @@ impl TaskSpecification {
             request_method,
             payload,
         });
+    }
+    pub fn build_headers(&self, header_map: &HashMap<String, String>) -> HeaderMap {
+        let header: HeaderMap = header_map
+            .iter()
+            .map(|(name, val)| {
+                (
+                    HeaderName::from_str(name.to_lowercase().as_str()),
+                    HeaderValue::from_str(val.as_str()),
+                )
+            })
+            .filter(|(k, v)| k.is_ok() && v.is_ok())
+            .map(|(k, v)| (k.unwrap(), v.unwrap()))
+            .collect();
+        return header;
+    }
+
+    pub fn build_request(&self, http_client: &Client) -> Option<RequestBuilder> {
+        // let headers = build_headers(sync_task.spec().request_header());
+        // let build_request_result = build_request(
+        //     &self.http_client,
+        //     sync_task.spec().request_endpoint().as_str(),
+        //     sync_task.spec().request_method().to_owned(),
+        //     Some(headers),
+        //     sync_task.spec().payload().clone(),
+        // );
+        let method = match self.request_method {
+            RequestMethod::Get => Method::GET,
+            RequestMethod::Post => Method::POST
+        };
+
+        let mut request_builder = http_client.request(method, self.request_endpoint.clone());
+
+        // Add headers to the request
+        for (key, value) in &self.request_header {
+            request_builder = request_builder.header(key, value);
+        }
+
+        match self.request_method {
+            RequestMethod::Get => {
+                // If payload is present, assume it's query parameters for a GET request
+                if let Some(payload) = &self.payload {
+                    // Assuming payload is a map-like structure. Convert it to query parameters.
+                    if let Ok(params) = serde_qs::to_string(payload) {
+                        let url_with_params = format!("{}?{}", self.request_endpoint, params);
+                        request_builder = http_client.request(method, Url::parse(&url_with_params).ok()?);
+                        for (key, value) in &self.request_header {
+                            request_builder = request_builder.header(key, value);
+                        }
+                    }
+                }
+            },
+            _ => {
+                // For non-GET requests, add payload as JSON
+                if let Some(payload) = &self.payload {
+                    request_builder = request_builder.json(payload);
+                }
+            }
+        }
+
+        Some(request_builder)
     }
 }
 

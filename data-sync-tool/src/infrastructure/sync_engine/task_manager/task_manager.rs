@@ -16,6 +16,7 @@ use crate::{
 use super::commands::{TaskManagerCommand, TaskManagerResponse, TaskRequestResponse};
 
 #[derive(Debug, Clone, Getters)]
+#[getset(get = "pub")]
 pub struct Task {
     plan_id: Uuid,
     task_id: Uuid,

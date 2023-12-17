@@ -5,7 +5,7 @@
 
 use getset::Getters;
 use log::{info, error};
-use tokio::sync::{mpsc, broadcast};
+use tokio::{sync::{broadcast, mpsc}, select, time::{timeout, Duration}};
 
 use crate::infrastructure::sync_engine::{task_manager::commands::{TaskManagerCommand, TaskManagerResponse}, worker::commands::{SupervisorCommand, SupervisorResponse}, ComponentState};
 
@@ -29,7 +29,8 @@ pub struct SyncEngine {
     engine_rx: mpsc::Receiver<EngineCommands>,
     engine_tx: mpsc::Sender<EngineCommands>,
     engine_resp_tx: broadcast::Sender<EngineResponse>,
-    state: ComponentState
+    state: ComponentState,
+    response_timeout: Duration
 }
 
 impl SyncEngine {
@@ -38,6 +39,7 @@ impl SyncEngine {
         task_manager_resp_rx: broadcast::Receiver<TaskManagerResponse>,
         supervisor_tx: mpsc::Sender<SupervisorCommand>,
         supervisor_resp_rx: mpsc::Receiver<SupervisorResponse>,
+        response_timeout: Option<Duration>
     ) -> (Self, mpsc::Sender<EngineCommands>, broadcast::Receiver<EngineResponse>) {
         let (engine_tx, engine_rx) = mpsc::channel::<EngineCommands>(100);
         let (engine_resp_tx, engine_resp_rx) = broadcast::channel::<EngineResponse>(100);
@@ -49,7 +51,8 @@ impl SyncEngine {
             engine_rx,
             engine_tx: engine_tx.clone(),
             engine_resp_tx,
-            state: ComponentState::Created
+            state: ComponentState::Created,
+            response_timeout: response_timeout.unwrap_or(Duration::from_secs(5))
         };
 
         (engine, engine_tx, engine_resp_rx)
@@ -60,7 +63,7 @@ impl SyncEngine {
         self.state = ComponentState::Running;
 
         loop {
-            tokio::select! {
+            select! {
                 // The engine should stay responsive to external commands
                 // Then wait for its submodules' response
                 biased;
@@ -69,18 +72,42 @@ impl SyncEngine {
                     self.handle_command(command).await;
                     break;
                 },
-                recv_result = self.task_manager_resp_rx.recv() => {
-                    match recv_result {
-                        Ok(response) => { self.handle_task_manager_response(response).await; },
-                        Err(e) => { error!("{}", e)}
+                tm_response_result = timeout(self.response_timeout, self.task_manager_resp_rx.recv()) => {
+                    match tm_response_result {
+                        Ok(tm_response) => {
+                            // Handle the command...
+                            match tm_response {
+                                Ok(response) => { self.handle_task_manager_response(response).await; },
+                                Err(e) => { error!("{}", e)}
+                            }
+                        },
+                        Err(_) => {
+                            // Timeout occurred...
+                            error!("Timeout while waiting for task manager response");
+                        }
                     }
                 },
-                Some(response) = self.supervisor_resp_rx.recv() => {
-                    self.handle_supervisor_response(response).await;
+                supervisor_response_result = timeout(self.response_timeout, self.supervisor_resp_rx.recv()) => {
+                    match supervisor_response_result {
+                        Ok(sp_response) => {
+                            // Handle the command...
+                            match sp_response {
+                                Some(response) => { self.handle_supervisor_response(response).await; },
+                                None => { error!("Received no response from supervisor!")}
+                            }
+                        },
+                        Err(_) => {
+                            // Timeout occurred...
+                            error!("Timeout while waiting for supervisor response");
+                        }
+                    }
                 },
                 else => break,
             }
         }
+        
+        self.state = ComponentState::Stopped;
+        info!("Engine is down.");
     }
 
     async fn handle_command(&mut self, command: EngineCommands) {

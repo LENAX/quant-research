@@ -37,7 +37,7 @@ pub struct CreateTaskRequest {
     url: Url,
     request_method: RequestMethod,
     request_header: HashMap<String, String>,
-    payload: Option<Arc<Value>>,
+    payload: Option<Value>,
 }
 
 // Synchronization Plan

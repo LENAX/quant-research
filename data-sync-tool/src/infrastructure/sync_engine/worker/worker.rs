@@ -6,14 +6,15 @@ use tokio::{
     select,
     sync::{broadcast, mpsc},
     task::JoinHandle,
-    time::{timeout, Duration, sleep},
+    time::{sleep, timeout, Duration},
 };
 
 use uuid::Uuid;
 
-use crate::infrastructure::sync_engine::task_manager::{commands::{
-    TaskManagerCommand, TaskManagerResponse, TaskRequestResponse,
-}, task_manager::Task};
+use crate::infrastructure::sync_engine::task_manager::{
+    commands::{TaskManagerCommand, TaskManagerResponse, TaskRequestResponse},
+    task_manager::Task,
+};
 
 use super::commands::{WorkerCommand, WorkerResponse, WorkerResult};
 
@@ -23,7 +24,7 @@ pub enum WorkerError {
     TaskReceiverChannelClosed,
     PlanNotFound(Uuid),
     SendFailed,
-    BuildRequestFailed
+    BuildRequestFailed,
 }
 
 #[derive(Debug)]
@@ -45,7 +46,10 @@ impl PartialEq for WorkerState {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (WorkerState::Idle, WorkerState::Idle) => true,
-            (WorkerState::Working { plan_id: id1, .. }, WorkerState::Working { plan_id: id2, .. }) => id1 == id2,
+            (
+                WorkerState::Working { plan_id: id1, .. },
+                WorkerState::Working { plan_id: id2, .. },
+            ) => id1 == id2,
             // Add comparisons for other variants...
             _ => false,
         }
@@ -97,166 +101,170 @@ impl Worker {
         }
     }
 
-    async fn handle_sync(&mut self, plan_id: Uuid) {
-        if let Some(task_req_receiver) = &self.task_rx {
-            let task_manager_cmd_tx_clone = self.task_manager_cmd_tx.clone();
-            let mut task_req_receiver_clone = task_req_receiver.resubscribe();
-            let result_sender = self.result_tx.clone();
-            let client = self.http_client.clone();
-            let task_handle: JoinHandle<Result<(), WorkerError>> = tokio::spawn(async move {
-                loop {
-                    // TODO: Add rate limiting
-
-                    if let Err(e) = task_manager_cmd_tx_clone.send(TaskManagerCommand::RequestTask(plan_id)).await {
-                        error!("Failed to send task request! Error: {}", e);
-                        return Err(WorkerError::SendFailed);
-                    }
-
-                    match task_req_receiver_clone.recv().await {
-                        Ok(resp) => {
-                            match resp {
-                                TaskRequestResponse::NewTask(task) => {
-                                    debug!("Received a task: {:#?}", &task);
-                                    if let Some(request_builder) = task.spec().build_request(&client) {
-                                        match request_builder.send().await {
-                                            Ok(resp) => {
-                                                info!("status: {}", resp.status());
-                                                let parse_result: Result<Value, reqwest::Error> = resp.json().await;
-                                                match parse_result {
-                                                    Ok(data) => {
-                                                        let task_result = WorkerResult::TaskCompleted {
-                                                            plan_id: *task.plan_id(),
-                                                            task_id: *task.task_id(),
-                                                            result: data,
-                                                            complete_time: chrono::Local::now()
-                                                        };
-                                                        if let Err(e) = result_sender.send(task_result).await {
-                                                            error!("Failed to send result: {}",e);
-                                                        }
-                                                    },
-                                                    Err(_) => {
-                                                        error!("Unable to parse result");
-                                                    },
-                                                }
-                                            },
-                                            Err(e) => {
-                                                error!("Failed to send request: {}", e);
-                                            }
-                                        }
-                                    }
-                                },
-                                TaskRequestResponse::NoTaskLeft => {
-                                    info!("No task left. Sync completed.");
-                                    return Ok(());
-                                },
-                                TaskRequestResponse::PlanNotFound(plan_id) => {
-                                    error!("Plan {} not found!", plan_id);
-                                    return Err(WorkerError::PlanNotFound(plan_id));
-                                },
-                            }
-                        },
-                        Err(e) => {
-                            error!("Task receiver channel closed. Exit. Error: {}", e);
-                            return Err(WorkerError::TaskReceiverChannelClosed);
-                        },
-                    }
-                    sleep(Duration::from_millis(500)).await;
+    pub async fn run(&mut self) {
+        while let Some(command) = self.cmd_rx.recv().await {
+            match command {
+                WorkerCommand::Shutdown => self.handle_shutdown().await,
+                WorkerCommand::AssignPlan {
+                    plan_id,
+                    task_receiver,
+                    start_immediately,
+                } => {
+                    self.handle_assign_plan(plan_id, task_receiver, start_immediately)
+                        .await
                 }
-            });
-
-            self.state = WorkerState::Working { plan_id, task_handle }
+                WorkerCommand::StartSync => self.handle_start_sync().await,
+                WorkerCommand::CancelPlan(plan_id) => self.handle_cancel_plan(plan_id).await, // ... other commands ...
+            }
         }
     }
 
+    // Handling shutdown
+    async fn handle_shutdown(&mut self) {
+        if let WorkerState::Working { task_handle, .. } = &self.state {
+            task_handle.abort();
+        }
+        self.state = WorkerState::Stopped;
+        let _ = self
+            .resp_tx
+            .send(WorkerResponse::ShutdownComplete(self.id))
+            .await;
+    }
 
+    // Assigning a new plan
+    async fn handle_assign_plan(
+        &mut self,
+        plan_id: Uuid,
+        task_receiver: broadcast::Receiver<TaskRequestResponse>,
+        start_immediately: bool,
+    ) {
+        let task_receiver_clone = task_receiver.resubscribe();
+        self.assigned_plan_id = Some(plan_id);
+        self.task_rx = Some(task_receiver);
 
-    pub async fn run(mut self) {
-        info!("Worker {} started", self.id);
-        self.state = WorkerState::Idle;
+        if start_immediately {
+            self.start_syncing_plan(
+                plan_id,
+                self.task_manager_cmd_tx.clone(),
+                task_receiver_clone,
+            )
+            .await;
+        } else {
+            self.state = WorkerState::Ready { plan_id };
+        }
+    }
 
-        loop {
-            tokio::select! {
-                Some(command) = self.cmd_rx.recv() => {
-                    match command {
-                        WorkerCommand::Shutdown => {
-                            info!("Worker {} shutting down", self.id);
-                            self.state = WorkerState::Stopped;
-                            break;
-                        },
-                        WorkerCommand::AssignPlan { plan_id, task_receiver, start_immediately } => {
-                            info!("Worker {} assigned to plan {}", self.id, plan_id);
-                            self.assigned_plan_id = Some(plan_id);
-                            self.state = WorkerState::Ready { plan_id }; // Assuming task_id is generated here
-                            debug!("Worker {}'s state: {:?}", self.id, self.state);
-                            self.task_rx = Some(task_receiver);
+    // Starting synchronization
+    async fn handle_start_sync(&mut self) {
+        if let Some(plan_id) = self.assigned_plan_id {
+            if let Some(task_rx) = &self.task_rx {
+                let task_rx_clone = task_rx.resubscribe();
+                self.start_syncing_plan(plan_id, self.task_manager_cmd_tx.clone(), task_rx_clone)
+                    .await;
+            }
+        }
+    }
 
-                            if start_immediately {
-                                // Start a new task to handle actual data syncing
-                                self.handle_sync(plan_id).await;
-                                if let Err(e) = self.resp_tx.send(WorkerResponse::StartOk { worker_id: self.id, plan_id }).await {
-                                    error!("Failed to send response: {}", e);
-                                }
-                                
-                            } else {
-                                if let Err(e) = self.resp_tx.send(WorkerResponse::PlanAssigned {
-                                    worker_id: self.id,
-                                    plan_id,
-                                    sync_started: start_immediately
-                                }).await {
-                                    error!("Failed to send response: {}", e);
-                                }
+    // Canceling a plan
+    async fn handle_cancel_plan(&mut self, plan_id: Uuid) {
+        if let WorkerState::Working {
+            task_handle,
+            plan_id: current_plan_id,
+        } = &self.state
+        {
+            if *current_plan_id == plan_id {
+                task_handle.abort();
+                self.state = WorkerState::Idle;
+                self.assigned_plan_id = None;
+                let _ = self
+                    .resp_tx
+                    .send(WorkerResponse::PlanCancelled {
+                        worker_id: self.id,
+                        plan_id,
+                    })
+                    .await;
+            }
+        }
+    }
+
+    // Starting the task processing loop for a specific plan
+    async fn start_syncing_plan(
+        &mut self,
+        plan_id: Uuid,
+        task_manager_cmd_tx: mpsc::Sender<TaskManagerCommand>,
+        mut task_req_receiver: broadcast::Receiver<TaskRequestResponse>,
+    ) {
+        let result_sender = self.result_tx.clone();
+        let client = self.http_client.clone();
+        let task_handle: JoinHandle<Result<(), WorkerError>> = tokio::spawn(async move {
+            loop {
+                // TODO: Add rate limiting
+
+                if let Err(e) = task_manager_cmd_tx
+                    .send(TaskManagerCommand::RequestTask(plan_id))
+                    .await
+                {
+                    error!("Failed to send task request! Error: {}", e);
+                    return Err(WorkerError::SendFailed);
+                }
+
+                match task_req_receiver.recv().await {
+                    Ok(resp) => match resp {
+                        TaskRequestResponse::NewTask(task) => {
+                            debug!("Received a task: {:#?}", &task);
+                            Worker::process_tasks(&task, &client, &result_sender);
+                        }
+                        TaskRequestResponse::NoTaskLeft => {
+                            info!("No task left. Sync completed.");
+                            return Ok(());
+                        }
+                        TaskRequestResponse::PlanNotFound(plan_id) => {
+                            error!("Plan {} not found!", plan_id);
+                            return Err(WorkerError::PlanNotFound(plan_id));
+                        }
+                    },
+                    Err(e) => {
+                        error!("Task receiver channel closed. Exit. Error: {}", e);
+                        return Err(WorkerError::TaskReceiverChannelClosed);
+                    }
+                }
+                sleep(Duration::from_millis(500)).await;
+            }
+        });
+
+        self.state = WorkerState::Working {
+            plan_id,
+            task_handle,
+        };
+    }
+
+    // Process tasks by sending request to remote data provider
+    async fn process_tasks(task: &Task, client: &Client, result_tx: &mpsc::Sender<WorkerResult>) {
+        if let Some(request_builder) = task.spec().build_request(client) {
+            match request_builder.send().await {
+                Ok(resp) => {
+                    info!("status: {}", resp.status());
+                    let parse_result: Result<Value, reqwest::Error> = resp.json().await;
+                    match parse_result {
+                        Ok(data) => {
+                            let task_result = WorkerResult::TaskCompleted {
+                                plan_id: *task.plan_id(),
+                                task_id: *task.task_id(),
+                                result: data,
+                                complete_time: chrono::Local::now(),
+                            };
+                            if let Err(e) = result_tx.send(task_result).await {
+                                error!("Failed to send result: {}", e);
                             }
-                        },
-                        WorkerCommand::StartSync => {
-                            // Implement logic to start syncing if a plan is assigned
-                            if let Some(plan_id) = self.assigned_plan_id {
-                                // Start syncing logic here
-                                self.handle_sync(plan_id).await;
-                                if let Err(e) = self.resp_tx.send(WorkerResponse::StartOk { worker_id: self.id, plan_id }).await {
-                                    error!("Failed to send response: {}", e);
-                                }
-                            } else {
-                                if let Err(e) = self.resp_tx.send(WorkerResponse::StartFailed { worker_id: self.id, reason: "No plan assigned".to_string() }).await {
-                                    error!("Failed to send response: {}", e);
-                                }
-                            }
-                        },
-                        WorkerCommand::CancelPlan(plan_id) => {
-                            // Implement logic to cancel the plan
-                            if let Some(current_plan_id) = self.assigned_plan_id {
-                                if current_plan_id == plan_id {
-                                    self.cancel_current_plan(plan_id).await;
-                                }
-                            }
+                        }
+                        Err(_) => {
+                            error!("Unable to parse result");
                         }
                     }
                 }
-            }
-        }
-
-        if let Err(e) = self
-            .resp_tx
-            .send(WorkerResponse::ShutdownComplete(self.id))
-            .await
-        {
-            error!("Failed to send shutdown complete. error: {}", e);
-        }
-    }
-
-    async fn cancel_current_plan(&mut self, plan_id: Uuid) {
-        // Check if the current state is Working and matches the plan_id
-        info!("Cancelling syncing plan {}", plan_id);
-        if let WorkerState::Working { plan_id: current_plan_id, task_handle } = &self.state {
-            if *current_plan_id == plan_id {
-                // Cancel the task
-                task_handle.abort();
-
-                // Reset state and assigned_plan_id
-                self.assigned_plan_id = None;
-                self.state = WorkerState::Idle;
-                info!("Plan {} cancelled.", plan_id);
-                // Send cancellation response
-                let _ = self.resp_tx.send(WorkerResponse::PlanCancelled { worker_id: self.id, plan_id }).await;
+                Err(e) => {
+                    error!("Failed to send request: {}", e);
+                }
             }
         }
     }

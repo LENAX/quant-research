@@ -109,20 +109,12 @@ impl TaskSpecification {
     }
 
     pub fn build_request(&self, http_client: &Client) -> Option<RequestBuilder> {
-        // let headers = build_headers(sync_task.spec().request_header());
-        // let build_request_result = build_request(
-        //     &self.http_client,
-        //     sync_task.spec().request_endpoint().as_str(),
-        //     sync_task.spec().request_method().to_owned(),
-        //     Some(headers),
-        //     sync_task.spec().payload().clone(),
-        // );
         let method = match self.request_method {
             RequestMethod::Get => Method::GET,
             RequestMethod::Post => Method::POST
         };
 
-        let mut request_builder = http_client.request(method, self.request_endpoint.clone());
+        let mut request_builder = http_client.request(method.clone(), self.request_endpoint.clone());
 
         // Add headers to the request
         for (key, value) in &self.request_header {
@@ -136,7 +128,7 @@ impl TaskSpecification {
                     // Assuming payload is a map-like structure. Convert it to query parameters.
                     if let Ok(params) = serde_qs::to_string(payload) {
                         let url_with_params = format!("{}?{}", self.request_endpoint, params);
-                        request_builder = http_client.request(method, Url::parse(&url_with_params).ok()?);
+                        request_builder = http_client.request(method.clone(), Url::parse(&url_with_params).ok()?);
                         for (key, value) in &self.request_header {
                             request_builder = request_builder.header(key, value);
                         }

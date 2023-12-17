@@ -119,7 +119,7 @@ impl Supervisor {
         let (tx, rx) = mpsc::channel(32);
         let worker_id = WorkerId::new_v4(); // Generate or assign a unique WorkerId
         let _ = tokio::spawn(async move {
-            let worker = Worker::new(
+            let mut worker = Worker::new(
                 worker_id,
                 rx,
                 task_manager_cmd_tx,

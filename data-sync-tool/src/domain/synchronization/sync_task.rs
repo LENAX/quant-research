@@ -83,7 +83,7 @@ impl SyncTask {
         match self.spec().request_method() {
             RequestMethod::Get => false,
             RequestMethod::Post => false,
-            RequestMethod::Websocket => true,
+            // RequestMethod::Websocket => true,
         }
     }
 

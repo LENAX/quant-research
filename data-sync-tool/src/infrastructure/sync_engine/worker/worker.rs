@@ -11,9 +11,9 @@ use tokio::{
 
 use uuid::Uuid;
 
-use crate::infrastructure::sync_engine::task_manager::commands::{
+use crate::infrastructure::sync_engine::task_manager::{commands::{
     TaskManagerCommand, TaskManagerResponse, TaskRequestResponse,
-};
+}, task_manager::Task};
 
 use super::commands::{WorkerCommand, WorkerResponse, WorkerResult};
 
@@ -22,7 +22,8 @@ pub enum WorkerError {
     ConnectionTimeout,
     TaskReceiverChannelClosed,
     PlanNotFound(Uuid),
-    SendFailed
+    SendFailed,
+    BuildRequestFailed
 }
 
 #[derive(Debug)]
@@ -34,11 +35,21 @@ pub enum WorkerState {
     },
     Working {
         plan_id: Uuid,
-        task_id: Option<Uuid>,
         // schedule syncing to a separate task
         task_handle: JoinHandle<Result<(), WorkerError>>,
     },
     Stopped,
+}
+
+impl PartialEq for WorkerState {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (WorkerState::Idle, WorkerState::Idle) => true,
+            (WorkerState::Working { plan_id: id1, .. }, WorkerState::Working { plan_id: id2, .. }) => id1 == id2,
+            // Add comparisons for other variants...
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Getters)]
@@ -86,6 +97,79 @@ impl Worker {
         }
     }
 
+    async fn handle_sync(&mut self, plan_id: Uuid) {
+        if let Some(task_req_receiver) = &self.task_rx {
+            let task_manager_cmd_tx_clone = self.task_manager_cmd_tx.clone();
+            let mut task_req_receiver_clone = task_req_receiver.resubscribe();
+            let result_sender = self.result_tx.clone();
+            let client = self.http_client.clone();
+            let task_handle: JoinHandle<Result<(), WorkerError>> = tokio::spawn(async move {
+                loop {
+                    // TODO: Add rate limiting
+
+                    if let Err(e) = task_manager_cmd_tx_clone.send(TaskManagerCommand::RequestTask(plan_id)).await {
+                        error!("Failed to send task request! Error: {}", e);
+                        return Err(WorkerError::SendFailed);
+                    }
+
+                    match task_req_receiver_clone.recv().await {
+                        Ok(resp) => {
+                            match resp {
+                                TaskRequestResponse::NewTask(task) => {
+                                    debug!("Received a task: {:#?}", &task);
+                                    if let Some(request_builder) = task.spec().build_request(&client) {
+                                        match request_builder.send().await {
+                                            Ok(resp) => {
+                                                info!("status: {}", resp.status());
+                                                let parse_result: Result<Value, reqwest::Error> = resp.json().await;
+                                                match parse_result {
+                                                    Ok(data) => {
+                                                        let task_result = WorkerResult::TaskCompleted {
+                                                            plan_id: *task.plan_id(),
+                                                            task_id: *task.task_id(),
+                                                            result: data,
+                                                            complete_time: chrono::Local::now()
+                                                        };
+                                                        if let Err(e) = result_sender.send(task_result).await {
+                                                            error!("Failed to send result: {}",e);
+                                                        }
+                                                    },
+                                                    Err(_) => {
+                                                        error!("Unable to parse result");
+                                                    },
+                                                }
+                                            },
+                                            Err(e) => {
+                                                error!("Failed to send request: {}", e);
+                                            }
+                                        }
+                                    }
+                                },
+                                TaskRequestResponse::NoTaskLeft => {
+                                    info!("No task left. Sync completed.");
+                                    return Ok(());
+                                },
+                                TaskRequestResponse::PlanNotFound(plan_id) => {
+                                    error!("Plan {} not found!", plan_id);
+                                    return Err(WorkerError::PlanNotFound(plan_id));
+                                },
+                            }
+                        },
+                        Err(e) => {
+                            error!("Task receiver channel closed. Exit. Error: {}", e);
+                            return Err(WorkerError::TaskReceiverChannelClosed);
+                        },
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                }
+            });
+
+            self.state = WorkerState::Working { plan_id, task_handle }
+        }
+    }
+
+
+
     pub async fn run(mut self) {
         info!("Worker {} started", self.id);
         self.state = WorkerState::Idle;
@@ -108,119 +192,43 @@ impl Worker {
 
                             if start_immediately {
                                 // Start a new task to handle actual data syncing
-                                if let Some(task_req_receiver) = self.task_rx {
-                                    let task_manager_cmd_tx_clone = self.task_manager_cmd_tx.clone();
-                                    let mut task_req_receiver_clone = task_req_receiver.resubscribe();
-                                    let result_sender = self.result_tx.clone();
-                                    let client = self.http_client.clone();
-                                    let task_handle: JoinHandle<Result<(), WorkerError>> = tokio::spawn(async move {
-                                        loop {
-                                            if let Err(e) = task_manager_cmd_tx_clone.send(TaskManagerCommand::RequestTask(plan_id)).await {
-                                                error!("Failed to send task request!");
-                                                return Err(WorkerError::SendFailed);
-                                            }
-
-                                            match task_req_receiver_clone.recv().await {
-                                                Ok(resp) => {
-                                                    match resp {
-                                                        TaskRequestResponse::NewTask(task) => {
-                                                            debug!("Received a task: {:#?}", &task);
-                                                            if let Some(request_builder) = task.spec().build_request(&client) {
-                                                                match request_builder.send().await {
-                                                                    Ok(resp) => {
-                                                                        info!("status: {}", resp.status());
-                                                                        let parse_result: Result<Value, reqwest::Error> = resp.json().await;
-                                                                        match parse_result {
-                                                                            Ok(data) => {
-                                                                                let task_result = WorkerResult::TaskCompleted {
-                                                                                    plan_id: *task.plan_id(),
-                                                                                    task_id: *task.task_id(),
-                                                                                    result: data,
-                                                                                    complete_time: chrono::Local::now()
-                                                                                };
-                                                                                if let Err(e) = result_sender.send(task_result).await {
-                                                                                    error!("Failed to send result: {}",e);
-                                                                                }
-                                                                            },
-                                                                            Err(_) => {
-                                                                                error!("Unable to parse result");
-                                                                            },
-                                                                        }
-                                                                    },
-                                                                    Err(e) => {
-                                                                        error!("Failed to send request: {}", e);
-                                                                    }
-                                                                }
-                                                            }
-                                                        },
-                                                        TaskRequestResponse::NoTaskLeft => {
-                                                            info!("No task left. Sync completed.");
-                                                            return Ok(());
-                                                        },
-                                                        TaskRequestResponse::PlanNotFound(plan_id) => {
-                                                            error!("Plan {} not found!", plan_id);
-                                                            return Err(WorkerError::PlanNotFound(plan_id));
-                                                        },
-                                                    }
-                                                },
-                                                Err(e) => {
-                                                    error!("Task receiver channel closed. Exit. Error: {}", e);
-                                                    return Err(WorkerError::TaskReceiverChannelClosed);
-                                                },
-                                            }
-                                            sleep(Duration::from_millis(500)).await;
-                                        }
-                                    });
+                                self.handle_sync(plan_id).await;
+                                if let Err(e) = self.resp_tx.send(WorkerResponse::StartOk { worker_id: self.id, plan_id }).await {
+                                    error!("Failed to send response: {}", e);
+                                }
+                                
+                            } else {
+                                if let Err(e) = self.resp_tx.send(WorkerResponse::PlanAssigned {
+                                    worker_id: self.id,
+                                    plan_id,
+                                    sync_started: start_immediately
+                                }).await {
+                                    error!("Failed to send response: {}", e);
                                 }
                             }
-
-                            let _ = self.resp_tx.send(WorkerResponse::PlanAssigned {
-                                worker_id: self.id,
-                                plan_id,
-                                sync_started: start_immediately
-                            }).await;
                         },
                         WorkerCommand::StartSync => {
                             // Implement logic to start syncing if a plan is assigned
                             if let Some(plan_id) = self.assigned_plan_id {
                                 // Start syncing logic here
-                                let _ = self.resp_tx.send(WorkerResponse::StartOk { worker_id: self.id, plan_id }).await;
+                                self.handle_sync(plan_id).await;
+                                if let Err(e) = self.resp_tx.send(WorkerResponse::StartOk { worker_id: self.id, plan_id }).await {
+                                    error!("Failed to send response: {}", e);
+                                }
                             } else {
-                                let _ = self.resp_tx.send(WorkerResponse::StartFailed { worker_id: self.id, reason: "No plan assigned".to_string() }).await;
+                                if let Err(e) = self.resp_tx.send(WorkerResponse::StartFailed { worker_id: self.id, reason: "No plan assigned".to_string() }).await {
+                                    error!("Failed to send response: {}", e);
+                                }
                             }
                         },
                         WorkerCommand::CancelPlan(plan_id) => {
                             // Implement logic to cancel the plan
-                            if self.assigned_plan_id == Some(plan_id) {
-                                // Cancel the plan logic here
-                                self.assigned_plan_id = None;
-                                self.state = WorkerState::Idle;
-                                let _ = self.resp_tx.send(WorkerResponse::PlanCancelled { worker_id: self.id, plan_id }).await;
+                            if let Some(current_plan_id) = self.assigned_plan_id {
+                                if current_plan_id == plan_id {
+                                    self.cancel_current_plan(plan_id).await;
+                                }
                             }
-                        },
-                        WorkerCommand::CheckStatus => {
-                            // Implement logic to check and report the status
-                        },
-                        // Other commands as needed
-                    }
-                },
-                response_result = timeout(self.response_timeout, self.tm_resp_rx.recv()) => {
-                    match response_result {
-                        Ok(result) => {
-                            match result {
-                                Ok(response) => {
-                                    match response {
-                                        TaskManagerResponse::ShutdownComplete => todo!(),
-                                        TaskManagerResponse::PlanAdded { plan_id } => todo!(),
-                                        TaskManagerResponse::PlanRemoved { plan_id } => todo!(),
-                                        TaskManagerResponse::Error { message } => todo!(),
-                                        TaskManagerResponse::TaskChannel { plan_id, task_sender } => todo!(),
-                                    }
-                                },
-                                Err(_) => todo!(),
-                            }
-                        },
-                        Err(_) => todo!(),
+                        }
                     }
                 }
             }
@@ -232,6 +240,24 @@ impl Worker {
             .await
         {
             error!("Failed to send shutdown complete. error: {}", e);
+        }
+    }
+
+    async fn cancel_current_plan(&mut self, plan_id: Uuid) {
+        // Check if the current state is Working and matches the plan_id
+        info!("Cancelling syncing plan {}", plan_id);
+        if let WorkerState::Working { plan_id: current_plan_id, task_handle } = &self.state {
+            if *current_plan_id == plan_id {
+                // Cancel the task
+                task_handle.abort();
+
+                // Reset state and assigned_plan_id
+                self.assigned_plan_id = None;
+                self.state = WorkerState::Idle;
+                info!("Plan {} cancelled.", plan_id);
+                // Send cancellation response
+                let _ = self.resp_tx.send(WorkerResponse::PlanCancelled { worker_id: self.id, plan_id }).await;
+            }
         }
     }
 }

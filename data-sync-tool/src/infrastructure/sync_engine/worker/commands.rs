@@ -44,10 +44,16 @@ pub enum WorkerCommand {
     Shutdown,
     AssignPlan { plan_id: Uuid, task_receiver: broadcast::Receiver<TaskRequestResponse>, start_immediately: bool },
     StartSync,
-    CancelPlan(Uuid),
-    CheckStatus,
+    CancelPlan(Uuid)
 }
 
+#[derive(Debug)]
+pub enum WorkerStatus {
+    Idle,
+    Ready,
+    Running,
+    Stopped
+}
 
 
 #[derive(Debug)]

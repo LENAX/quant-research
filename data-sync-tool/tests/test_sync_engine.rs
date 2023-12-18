@@ -54,12 +54,14 @@ mod integration_tests {
     use super::*;
     use data_sync_tool::infrastructure::{sync_engine::init_engine, commands::Plan};
     use tokio::time::{timeout, Duration, sleep};
-    use fast_log::config::Config;
+    // use fast_log::config::Config;
+    use pretty_env_logger;
 
     #[tokio::test]
     async fn test_web_api_integration() {
-        fast_log::init(Config::new().console().chan_len(Some(100000))).unwrap();
-
+        // fast_log::init(Config::new().console().chan_len(Some(100000))).unwrap();
+        pretty_env_logger::init();
+        
         // Initialize the engine
         let mut engine = init_engine(Some(4), Some(100), Some(Duration::from_secs(5))).await;
 

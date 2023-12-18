@@ -55,10 +55,10 @@ pub struct Supervisor {
 
 impl Supervisor {
     pub fn new(
-        n_workers: usize,
+        n_workers: Option<usize>,
         task_manager_cmd_tx: mpsc::Sender<TaskManagerCommand>,
         task_manager_resp_rx: broadcast::Receiver<TaskManagerResponse>,
-        task_rx: broadcast::Receiver<TaskManagerResponse>,
+        task_manager_resp_tx: broadcast::Sender<TaskManagerResponse>,
         worker_result_tx: mpsc::Sender<WorkerResult>,
         response_timeout: Option<Duration>,
     ) -> (
@@ -73,13 +73,13 @@ impl Supervisor {
         let mut worker_cmd_tx = HashMap::new();
         let mut worker_assignment = HashMap::new();
 
-        for _ in 0..n_workers {
+        for _ in 0..n_workers.unwrap_or(10) {
             // TODO: Support customized rate limiting later
             let (worker_id, tx) = Supervisor::spawn_worker(
                 task_manager_cmd_tx.clone(),
                 worker_resp_tx.clone(),
                 worker_result_tx.clone(),
-                task_rx.resubscribe(),
+                task_manager_resp_tx.subscribe(),
                 response_timeout,
                 None
             );
@@ -137,6 +137,7 @@ impl Supervisor {
 
     pub async fn run(mut self) {
         self.state = ComponentState::Running;
+        info!("Supervisor is up! Waiting for command...");
 
         loop {
             select! {
@@ -179,6 +180,8 @@ impl Supervisor {
                 }
             }
         }
+
+        info!("Supervisor is down! Exit.");
     }
 
     async fn handle_shutdown(&mut self) {

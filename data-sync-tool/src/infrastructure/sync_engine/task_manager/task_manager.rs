@@ -4,7 +4,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use getset::Getters;
-use log::info;
+use log::{info, error};
 use tokio::sync::{broadcast, mpsc};
 use uuid::Uuid;
 
@@ -36,22 +36,26 @@ impl TaskManager {
     pub fn new() -> (
         Self,
         mpsc::Sender<TaskManagerCommand>,
+        broadcast::Sender<TaskManagerResponse>,
         broadcast::Receiver<TaskManagerResponse>,
     ) {
         let (cmd_tx, cmd_rx) = mpsc::channel::<TaskManagerCommand>(300);
         let (resp_tx, resp_rx) = broadcast::channel::<TaskManagerResponse>(300);
         let tm = Self {
             cmd_rx,
-            resp_tx,
+            resp_tx: resp_tx.clone(),
             task_queues: HashMap::new(),
             task_senders: HashMap::new(),
             state: ComponentState::Created,
         };
 
-        (tm, cmd_tx, resp_rx)
+        (tm, cmd_tx, resp_tx, resp_rx)
     }
 
     pub async fn run(mut self) {
+        self.state = ComponentState::Running;
+        info!("Task manager is up! Waiting for command...");
+
         while let Some(command) = self.cmd_rx.recv().await {
             match command {
                 TaskManagerCommand::Shutdown => {
@@ -101,7 +105,9 @@ impl TaskManager {
                         );
 
                     if let Some(task_sender) = self.task_senders.get(&plan_id) {
-                        let _ = task_sender.send(response); // Send the response
+                        if let Err(e) = task_sender.send(response) {
+                            error!("Failed to send task request response! Error: {}", e);
+                        } // Send the response
                     }
                 },
                 TaskManagerCommand::RequestTaskReceiver { plan_id } => {
@@ -111,9 +117,13 @@ impl TaskManager {
                         TaskManagerResponse::Error { message: format!("No task sender found for plan {}", plan_id) }
                     };
 
-                    let _ = self.resp_tx.send(response);
+                    if let Err(e) = self.resp_tx.send(response) {
+                        error!("Failed to send task manager response! Error: {}", e);
+                    }
                 }
             }
         }
+
+        info!("Task manager is down! Exited.");
     }
 }

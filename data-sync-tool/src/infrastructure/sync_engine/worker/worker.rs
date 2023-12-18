@@ -102,6 +102,9 @@ impl Worker {
     }
 
     pub async fn run(&mut self) {
+        self.state = WorkerState::Idle;
+        info!("Worker {} is up! Waiting for command...", self.id);
+
         while let Some(command) = self.cmd_rx.recv().await {
             match command {
                 WorkerCommand::Shutdown => self.handle_shutdown().await,
@@ -121,14 +124,21 @@ impl Worker {
 
     // Handling shutdown
     async fn handle_shutdown(&mut self) {
+        info!("Worker {} received shutdown command! Try to shutdown gracefully...", self.id);
+
         if let WorkerState::Working { task_handle, .. } = &self.state {
             task_handle.abort();
+            info!("Worker {} aborted running task.", self.id);
         }
         self.state = WorkerState::Stopped;
-        let _ = self
+        if let Err(e) = self
             .resp_tx
             .send(WorkerResponse::ShutdownComplete(self.id))
-            .await;
+            .await {
+            error!("Worker {} failed to send shutdown response! Error: {}", self.id, e);
+        }
+
+        info!("Worker {} exitted.", self.id);
     }
 
     // Assigning a new plan
@@ -138,6 +148,7 @@ impl Worker {
         task_receiver: broadcast::Receiver<TaskRequestResponse>,
         start_immediately: bool,
     ) {
+        info!("Worker {} is assigned to plan {}.", self.id, plan_id);
         let task_receiver_clone = task_receiver.resubscribe();
         self.assigned_plan_id = Some(plan_id);
         self.task_rx = Some(task_receiver);
@@ -149,8 +160,10 @@ impl Worker {
                 task_receiver_clone,
             )
             .await;
+            info!("Worker {} starts working on plan {}.", self.id, plan_id);
         } else {
             self.state = WorkerState::Ready { plan_id };
+            info!("Worker {} is ready to work on plan {}.", self.id, plan_id);
         }
     }
 

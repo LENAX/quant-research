@@ -1,44 +1,94 @@
-// tests/integration_test.rs
+use data_sync_tool::{infrastructure::commands::Plan, domain::synchronization::value_objects::task_spec::TaskSpecification};
+use uuid::Uuid;
+use reqwest::{Url, Method};
+use serde_json::Value;
+use std::collections::HashMap;
 
-use data_sync_tool::infrastructure::{engine::engine::SyncEngine, task_manager::task_manager::{TaskManager, Task}, worker::supervisor::Supervisor, commands::EngineCommands};
+fn create_mock_plan() -> Plan {
+    // Generate a random UUID for the plan
+    let plan_id = Uuid::new_v4();
 
+    // Create a list of task specifications
+    let mut task_specs = Vec::new();
 
-#[tokio::test]
-async fn test_engine_task_processing_workflow() {
-    // Setup communication channels between components
-    let (engine_cmd_sender, engine_cmd_receiver) = tokio::sync::mpsc::channel(10);
-    // Other channels for task manager, supervisor, etc.
+    // Define a GET request task
+    let get_task_result = TaskSpecification::new(
+        "https://httpbin.org/get",
+        "GET",
+        HashMap::new(), // No additional headers for GET
+        None,
+    );
+    if let Ok(get_task) = get_task_result {
+        task_specs.push(get_task);
+    }
 
-    // Create instances of your components
-    let mut engine = SyncEngine::new(engine_cmd_receiver /*, other dependencies*/);
-    let task_manager = TaskManager::new(/* dependencies */);
-    let supervisor = Supervisor::new(/* dependencies */);
-    // Create workers if they are not created internally in the supervisor
+    // Define a POST request task with a simple JSON payload
+    let mut post_headers = HashMap::new();
+    post_headers.insert("Content-Type".to_string(), "application/json".to_string());
 
-    // Spawn tasks to run each component
-    let engine_handle = tokio::spawn(async move {
-        engine.run().await;
+    let post_payload = serde_json::json!({
+        "key": "value"
     });
-    // Spawn other components similarly
 
-    // Send a command to the engine to start the process
-    engine_cmd_sender.send(EngineCommands::Start).await.unwrap();
+    let post_task_result = TaskSpecification::new(
+        "https://httpbin.org/post",
+        "POST",
+        post_headers,
+        Some(post_payload),
+    );
+    if let Ok(post_task) = post_task_result {
+        task_specs.push(post_task);
+    }
 
-    // Create a task and send it to the task manager
-    let task = Task::new(/* task details */);
-    // Send the task to the task manager
-
-    // Verify the workflow
-    // E.g., check if the task reaches the workers and if it gets processed
-
-    // Shutdown the system
-    engine_cmd_sender.send(EngineCommands::Shutdown).await.unwrap();
-
-    // Wait for all components to finish
-    engine_handle.await.unwrap();
-    // Wait for other components similarly
-
-    // Assertions to verify the system behaved as expected
+    // Construct the Plan with the generated tasks
+    Plan {
+        plan_id,
+        task_specs,
+    }
 }
 
-// Additional tests...
+#[cfg(test)]
+mod integration_tests {
+    // use std::thread::sleep;
+
+    use super::*;
+    use data_sync_tool::infrastructure::{sync_engine::init_engine, commands::Plan};
+    use tokio::time::{timeout, Duration, sleep};
+    use fast_log::config::Config;
+
+    #[tokio::test]
+    async fn test_web_api_integration() {
+        fast_log::init(Config::new().console().chan_len(Some(100000))).unwrap();
+
+        // Initialize the engine
+        let mut engine = init_engine(Some(4), Some(100), Some(Duration::from_secs(5))).await;
+
+        sleep(Duration::from_secs(10)).await;
+
+        // Create a plan (Example, replace with actual plan creation)
+        // let plan = create_mock_plan();
+
+        // // Add a plan and start it immediately
+        // let add_plan_result = timeout(Duration::from_secs(10), 
+        //     engine.add_plan(plan, true)).await.expect("Timeout while adding plan");
+        
+        // assert!(add_plan_result.is_ok(), "Failed to add plan");
+
+        // let plan_id = add_plan_result.unwrap();
+
+        // // Check if the plan started successfully
+        // let start_sync_result = timeout(Duration::from_secs(10), 
+        //     engine.start_sync()).await.expect("Timeout while starting sync");
+
+        // assert!(start_sync_result.is_ok(), "Failed to start synchronization");
+
+        // // Optionally, check for worker results
+        // // ...
+
+        // // Finally, shutdown the engine
+        let shutdown_result = timeout(Duration::from_secs(10), 
+            engine.shutdown()).await.expect("Timeout while shutting down");
+        sleep(Duration::from_secs(10)).await;
+        // assert!(shutdown_result.is_ok(), "Failed to shut down engine");
+    }
+}

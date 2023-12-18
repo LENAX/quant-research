@@ -34,7 +34,7 @@ pub enum EngineCommands {
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineResponse {
     ShutdownComplete,
     PlanAdded { plan_id: Uuid },

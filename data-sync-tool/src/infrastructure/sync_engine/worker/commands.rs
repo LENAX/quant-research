@@ -67,7 +67,7 @@ pub enum WorkerResponse {
 
 // Multiple workers will send result through an mpsc channel 
 // There will be a dedicated domain service consuming the result
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WorkerResult {
     TaskCompleted {
         plan_id: Uuid,

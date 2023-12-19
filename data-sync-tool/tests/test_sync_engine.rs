@@ -53,35 +53,53 @@ pub fn create_mock_plan() -> Plan {
 
 #[cfg(test)]
 mod integration_tests {
-    use data_sync_tool::infrastructure::sync_engine::init_engine;
+    use data_sync_tool::infrastructure::{sync_engine::init_engine, worker_commands::WorkerResult};
     use log::info;
-    use tokio::time::{timeout, Duration, sleep};
+    use tokio::{time::{timeout, Duration, sleep}, sync::broadcast};
     use fast_log::config::Config;
 
     use crate::create_mock_plan;
     use pretty_env_logger;
 
+    async fn process_worker_results(mut results_rx: broadcast::Receiver<WorkerResult>) {
+        while let Ok(result) = results_rx.recv().await {
+            // Process each worker result here
+            info!("Received worker result: {:?}", result);
+        }
+    }
+
     #[tokio::test]
     async fn test_web_api_integration() {
-        fast_log::init(Config::new().console().chan_len(Some(100000))).unwrap();
-        // pretty_env_logger::init();
+        // fast_log::init(Config::new().console().chan_len(Some(100000))).unwrap();
+        pretty_env_logger::init();
         
         // Initialize the engine
         let mut engine = init_engine(Some(4), Some(100), Some(Duration::from_secs(5))).await;
+        let results_rx = engine.subscribe_to_worker_results();
 
         sleep(Duration::from_secs(1)).await;
 
+        tokio::spawn(async move {
+            process_worker_results(results_rx).await;
+        });
+
         // Create a plan (Example, replace with actual plan creation)
-        let plan = create_mock_plan();
-        info!("Created mock plan: {:?}", plan);
+        let plans = vec![
+            create_mock_plan(),
+            create_mock_plan(),
+            create_mock_plan(),
+            create_mock_plan(),
+        ];
 
         // // Add a plan and start it immediately
+        for plan in plans {
+            let add_plan_result = timeout(Duration::from_secs(10), 
+            engine.add_plan(plan, false)).await.expect("Timeout while adding plan");
         
-        let add_plan_result = timeout(Duration::from_secs(10), 
-            engine.add_plan(plan, true)).await.expect("Timeout while adding plan");
-        
-        info!("add_plan_result: {:?}", add_plan_result);
-        assert!(add_plan_result.is_ok(), "Failed to add plan");
+            info!("add_plan_result: {:?}", add_plan_result);
+            assert!(add_plan_result.is_ok(), "Failed to add plan");
+        }
+
 
         // let plan_id = add_plan_result.unwrap();
 

@@ -64,7 +64,7 @@ pub struct Worker {
     tm_resp_rx: broadcast::Receiver<TaskManagerResponse>,
     task_rx: Option<broadcast::Receiver<TaskRequestResponse>>,
     resp_tx: mpsc::Sender<WorkerResponse>,
-    result_tx: mpsc::Sender<WorkerResult>,
+    result_tx: broadcast::Sender<WorkerResult>,
     assigned_plan_id: Option<Uuid>,
     http_client: Client,
     // TODO: Add websocket streaming support
@@ -80,7 +80,7 @@ impl Worker {
         task_manager_cmd_tx: mpsc::Sender<TaskManagerCommand>,
         tm_resp_rx: broadcast::Receiver<TaskManagerResponse>,
         resp_tx: mpsc::Sender<WorkerResponse>,
-        result_tx: mpsc::Sender<WorkerResult>,
+        result_tx: broadcast::Sender<WorkerResult>,
         response_timeout: Option<Duration>,
         request_per_minute: Option<usize>,
     ) -> Self {
@@ -164,6 +164,9 @@ impl Worker {
         } else {
             self.state = WorkerState::Ready { plan_id };
             info!("Worker {} is ready to work on plan {}.", self.id, plan_id);
+            if let Err(e) = self.resp_tx.send(WorkerResponse::PlanAssigned { worker_id: self.id, plan_id, sync_started: false }).await {
+                error!("Failed to send plan assignment response! Error: {}", e);
+            }
         }
     }
 
@@ -249,11 +252,16 @@ impl Worker {
             plan_id,
             task_handle,
         };
+
+        if let Err(e) = self.resp_tx.send(WorkerResponse::StartOk { worker_id: self.id, plan_id }).await {
+            error!("Failed to send plan assignment response! Error: {}", e);
+        }
+
     }
 
     // Process tasks by sending request to remote data provider
-    async fn process_tasks(task: &Task, client: &Client, result_tx: &mpsc::Sender<WorkerResult>) {
-        info!("Worker is processing task {:#?}", task);
+    async fn process_tasks(task: &Task, client: &Client, result_tx: &broadcast::Sender<WorkerResult>) {
+        info!("Worker is processing task {:?}", task);
         if let Some(request_builder) = task.spec().build_request(client) {
             match request_builder.send().await {
                 Ok(resp) => {
@@ -268,7 +276,7 @@ impl Worker {
                                 result: data,
                                 complete_time: chrono::Local::now(),
                             };
-                            if let Err(e) = result_tx.send(task_result).await {
+                            if let Err(e) = result_tx.send(task_result) {
                                 error!("Failed to send result: {}", e);
                             }
                         }

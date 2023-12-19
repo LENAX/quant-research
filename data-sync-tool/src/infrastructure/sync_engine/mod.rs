@@ -19,9 +19,9 @@ pub mod worker;
 use std::time::Duration;
 
 use log::info;
-use tokio::{sync::mpsc, time::sleep};
+use tokio::{sync::{mpsc, broadcast}, time::sleep};
 
-use crate::infrastructure::sync_engine::engine_proxy::EngineProxy;
+use crate::infrastructure::sync_engine::engine_proxy::EngineController;
 
 use self::{
     engine::engine::SyncEngine,
@@ -41,13 +41,13 @@ pub async fn init_engine(
     n_workers: Option<usize>,
     channel_size: Option<usize>,
     engine_timeout: Option<Duration>,
-) -> EngineProxy {
+) -> EngineController {
     let channel_size = channel_size.unwrap_or(100);
 
     let (task_manager, task_manager_cmd_tx, task_manager_resp_tx, task_manager_resp_rx) =
         TaskManager::new();
 
-    let (worker_result_tx, worker_result_rx) = mpsc::channel::<WorkerResult>(5 * channel_size);
+    let (worker_result_tx, worker_result_rx) = broadcast::channel::<WorkerResult>(5 * channel_size);
     let (supervisor, supervisor_cmd_tx, supervisor_resp_rx) = Supervisor::new(
         n_workers,
         task_manager_cmd_tx.clone(),
@@ -84,5 +84,5 @@ pub async fn init_engine(
     // sleep(Duration::from_secs(1)).await;
     info!("Engine initialized!");
 
-    return EngineProxy::new(engine_cmd_sender, engine_resp_receiver, worker_result_rx);
+    return EngineController::new(engine_cmd_sender, engine_resp_receiver, worker_result_rx);
 }

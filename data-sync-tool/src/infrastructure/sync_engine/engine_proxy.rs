@@ -7,23 +7,45 @@ use super::{engine::commands::{EngineResponse, EngineCommands, Plan}, worker::co
 
 #[derive(Debug, Getters, MutGetters)]
 #[getset(get = "pub", get_mut = "pub")]
-pub struct EngineProxy {
+pub struct EngineController {
     engine_command_tx: mpsc::Sender<EngineCommands>,
     engine_resp_rx: broadcast::Receiver<EngineResponse>,
-    worker_result_rx: mpsc::Receiver<WorkerResult>,
+    worker_result_rx: broadcast::Receiver<WorkerResult>,
 }
 
-impl EngineProxy {
+impl EngineController {
     pub fn new(
         engine_cmd_sender: mpsc::Sender<EngineCommands>,
         engine_resp_receiver: broadcast::Receiver<EngineResponse>,
-        worker_result_rx: mpsc::Receiver<WorkerResult>,
+        worker_result_rx: broadcast::Receiver<WorkerResult>,
     ) -> Self {
-        EngineProxy {
+        EngineController {
             engine_command_tx: engine_cmd_sender,
             engine_resp_rx: engine_resp_receiver,
             worker_result_rx,
         }
+    }
+
+    pub async fn fetch_next_worker_result(&mut self) -> Result<WorkerResult, String> {
+        self.worker_result_rx.recv().await
+            .map_err(|e| format!("Failed to receive worker result: {}", e))
+    }
+
+    /// Continuously processes worker results.
+    /// This method will keep running and process each worker result as it arrives.
+    /// You can pass a callback function to process each result.
+    pub async fn process_worker_results<F>(&mut self, mut callback: F) -> Result<(), String>
+    where
+        F: FnMut(WorkerResult) -> (),
+    {
+        while let Ok(result) = self.worker_result_rx.recv().await {
+            callback(result);
+        }
+        Err("Worker result channel closed".to_string())
+    }
+
+    pub fn subscribe_to_worker_results(&self) -> broadcast::Receiver<WorkerResult> {
+        self.worker_result_rx.resubscribe()
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {

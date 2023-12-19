@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use getset::Getters;
-use log::{debug, error, info};
+use log::{error, info};
 use tokio::{
     select,
     sync::{broadcast, mpsc},
@@ -81,7 +81,7 @@ impl Supervisor {
                 worker_result_tx.clone(),
                 task_manager_resp_tx.subscribe(),
                 response_timeout,
-                None
+                None,
             );
 
             worker_assignment.insert(worker_id, WorkerAssignmentState::Idle);
@@ -114,7 +114,7 @@ impl Supervisor {
         result_tx: mpsc::Sender<WorkerResult>,
         task_rx: broadcast::Receiver<TaskManagerResponse>,
         response_timeout: Option<Duration>,
-        request_per_minute: Option<usize>
+        request_per_minute: Option<usize>,
     ) -> (WorkerId, mpsc::Sender<WorkerCommand>) {
         let (tx, rx) = mpsc::channel(32);
         let worker_id = WorkerId::new_v4(); // Generate or assign a unique WorkerId
@@ -127,7 +127,7 @@ impl Supervisor {
                 worker_resp_tx,
                 result_tx,
                 response_timeout,
-                request_per_minute
+                request_per_minute,
             );
             info!("Worker {} created!", worker_id);
             worker.run().await;
@@ -160,22 +160,57 @@ impl Supervisor {
                         }
                     }
                 },
-                response_result = timeout(self.response_timeout, self.worker_resp_rx.recv()) => {
+                response_result = self.worker_resp_rx.recv() => {
                     match response_result {
-                        Ok(Some(worker_response)) => {
+                        Some(worker_response) => {
                             // Handle the command...
                             self.handle_worker_response(worker_response).await;
                         },
-                        Ok(None) => {
+                        None => {
                             // The channel has been closed...
                             info!("Worker response channel closed. Supervisor might need to shut down or handle this situation.");
                             // Perform necessary actions like breaking the loop, cleanup, or re-initializing the channel.
                             break;
-                        },
-                        Err(_) => {
-                            // Timeout occurred...
-                            error!("Timeout while waiting for worker response");
                         }
+                    }
+                },
+                tm_resp_recv_result = self.task_manager_resp_rx.recv() => {
+                    match tm_resp_recv_result {
+                        Ok(tm_resp) => {
+                            match tm_resp {
+                                TaskManagerResponse::Error { message } => {
+                                    error!("Task manager error: {}", message);
+                                },
+                                TaskManagerResponse::TaskChannel { worker_id, plan_id, task_sender, start_immediately } => {
+
+                                    let task_receiver = task_sender.subscribe();
+
+                                    // Send the AssignPlan command to the worker
+                                    if let Some(worker_cmd_sender) = self.worker_cmd_tx.get(&worker_id) {
+                                        let command = WorkerCommand::AssignPlan {
+                                            plan_id,
+                                            task_receiver,
+                                            start_immediately,
+                                        };
+                                        if let Err(e) = worker_cmd_sender.send(command).await {
+                                            error!(
+                                                "Failed to send AssignPlan command to worker {}: {}",
+                                                worker_id, e
+                                            );
+                                        } else {
+                                            info!("Assigned plan {} to worker {}.", plan_id, worker_id);
+                                        }
+                                    } else {
+                                        error!("Worker command sender not found for worker {}", worker_id);
+                                    }
+
+                                },
+                                _ => {}
+                            }
+                        },
+                        Err(e) => {
+                            error!("Failed to receive task manager's response! Error: {}", e);
+                        },
                     }
                 }
             }
@@ -279,12 +314,14 @@ impl Supervisor {
                 if let Some(sender) = self.worker_cmd_tx.get(&worker_id) {
                     let sender_clone = sender.clone();
                     let task = tokio::spawn(async move {
+                        info!("Sending start sync command to worker...");
                         if let Err(e) = sender_clone.send(WorkerCommand::StartSync).await {
                             error!(
                                 "Failed to send start command to worker {}: {}",
                                 worker_id, e
                             );
                         }
+                        info!("Message sent.");
                     });
                     tasks.push(task);
                 }
@@ -401,46 +438,56 @@ impl Supervisor {
         start_immediately: bool,
     ) {
         // Request the task receiver for the plan from the Task Manager
-        let _ = self
+        info!("Requesting task receiver...");
+        if let Err(e) = self
             .task_manager_cmd_tx
-            .send(TaskManagerCommand::RequestTaskReceiver { plan_id })
-            .await;
-
-        // Await the response from the Task Manager
-        if let Ok(response) = self.task_manager_resp_rx.recv().await {
-            if let TaskManagerResponse::TaskChannel {
-                plan_id: received_plan_id,
-                task_sender,
-            } = response
-            {
-                if received_plan_id == plan_id {
-                    let task_receiver = task_sender.subscribe();
-
-                    // Send the AssignPlan command to the worker
-                    if let Some(worker_cmd_sender) = self.worker_cmd_tx.get(&worker_id) {
-                        let command = WorkerCommand::AssignPlan {
-                            plan_id,
-                            task_receiver,
-                            start_immediately,
-                        };
-                        if let Err(e) = worker_cmd_sender.send(command).await {
-                            error!(
-                                "Failed to send AssignPlan command to worker {}: {}",
-                                worker_id, e
-                            );
-                        } else {
-                            info!("Assigned plan {} to worker {}.", plan_id, worker_id);
-                        }
-                    } else {
-                        error!("Worker command sender not found for worker {}", worker_id);
-                    }
-                }
-            }
-        } else {
-            error!(
-                "Failed to receive task channel from Task Manager for plan {}",
-                plan_id
-            );
+            .send(TaskManagerCommand::RequestTaskReceiver {
+                plan_id,
+                worker_id,
+                start_immediately,
+            })
+            .await
+        {
+            error!("Failed to send task receiver request! Error: {}", e);
         }
+
+        // Wait for the response from the Task Manager
+        // info!("Waiting for task manager's response...");
+        // if let Ok(response) = self.task_manager_resp_rx.recv().await {
+        //     info!("task manager response: {:#?}", response);
+        //     if let TaskManagerResponse::TaskChannel {
+        //         plan_id: received_plan_id,
+        //         task_sender,
+        //     } = response
+        //     {
+        //         if received_plan_id == plan_id {
+        //             let task_receiver = task_sender.subscribe();
+
+        //             // Send the AssignPlan command to the worker
+        //             if let Some(worker_cmd_sender) = self.worker_cmd_tx.get(&worker_id) {
+        //                 let command = WorkerCommand::AssignPlan {
+        //                     plan_id,
+        //                     task_receiver,
+        //                     start_immediately,
+        //                 };
+        //                 if let Err(e) = worker_cmd_sender.send(command).await {
+        //                     error!(
+        //                         "Failed to send AssignPlan command to worker {}: {}",
+        //                         worker_id, e
+        //                     );
+        //                 } else {
+        //                     info!("Assigned plan {} to worker {}.", plan_id, worker_id);
+        //                 }
+        //             } else {
+        //                 error!("Worker command sender not found for worker {}", worker_id);
+        //             }
+        //         }
+        //     }
+        // } else {
+        //     error!(
+        //         "Failed to receive task channel from Task Manager for plan {}",
+        //         plan_id
+        //     );
+        // }
     }
 }

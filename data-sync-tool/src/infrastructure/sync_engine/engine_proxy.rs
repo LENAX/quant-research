@@ -1,4 +1,5 @@
 use getset::{Getters, MutGetters};
+use log::info;
 use tokio::sync::{mpsc, broadcast};
 use uuid::Uuid;
 
@@ -36,6 +37,7 @@ impl EngineProxy {
 
     pub async fn add_plan(&mut self, plan: Plan, start_immediately: bool) -> Result<Uuid, String> {
         let plan_id = plan.plan_id;
+        info!("Sending command add_plan to engine...");
         self.engine_command_tx
             .send(EngineCommands::AddPlan {
                 plan,
@@ -44,8 +46,9 @@ impl EngineProxy {
             .await
             .map_err(|e| e.to_string())?;
         
+        info!("Waiting for response...");
         match self
-            .wait_for_response(EngineResponse::PlanAdded { plan_id: plan_id })
+            .wait_for_response(EngineResponse::PlanAdded { plan_id })
             .await
         {
             Ok(()) => Ok(plan_id),
@@ -97,7 +100,9 @@ impl EngineProxy {
     }
 
     async fn wait_for_response(&mut self, expected_response: EngineResponse) -> Result<(), String> {
+        info!("Waiting for engine's response...");
         while let Ok(response) = self.engine_resp_rx.recv().await {
+            info!("Engine response: {:?}", response);
             if response == expected_response {
                 return Ok(());
             }

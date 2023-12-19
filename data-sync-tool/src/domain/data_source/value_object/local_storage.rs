@@ -1,6 +1,6 @@
 //! Local Storage Value Object
 //!
-use fake::Fake;
+
 use getset::{Getters, Setters};
 
 #[derive(Getters, Setters, Debug, Default, Clone, Eq, PartialEq)]

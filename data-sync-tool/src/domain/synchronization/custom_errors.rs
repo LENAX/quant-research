@@ -1,6 +1,6 @@
-use derivative::Derivative;
+
 use std::error::{self, Error};
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self};
 use url::ParseError;
 
 #[derive(Debug)]

@@ -36,6 +36,7 @@ pub enum EngineCommands {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineResponse {
+    ComponentShutdownComplete(String),
     ShutdownComplete,
     PlanAdded { plan_id: Uuid },
     PlanRemoved { plan_id: Uuid },
@@ -43,6 +44,6 @@ pub enum EngineResponse {
     SyncCancelled,
     PlanStarted { plan_id: Uuid },
     PlanCancelled { plan_id: Uuid },
-    Error { message: String }, // General error response
+    Error { message: String, component: String }, // General error response
     // Additional responses as needed...
 }

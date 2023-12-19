@@ -97,26 +97,28 @@ impl TaskManager {
                         .send(TaskManagerResponse::PlanRemoved { plan_id });
                 }
                 TaskManagerCommand::RequestTask(plan_id) => {
+                    info!("Task request received for plan {}!", plan_id);
                     let response = self.task_queues.get_mut(&plan_id)
                         .and_then(|queue| queue.pop_front()) // Try to get a task from the queue
                         .map_or_else(
                             || TaskRequestResponse::NoTaskLeft, // If no task, return NoTaskLeft
                             |task| TaskRequestResponse::NewTask(task) // If there's a task, return NewTask
                         );
-
+                    info!("Task request response: {:?}", response);
                     if let Some(task_sender) = self.task_senders.get(&plan_id) {
                         if let Err(e) = task_sender.send(response) {
                             error!("Failed to send task request response! Error: {}", e);
                         } // Send the response
                     }
                 },
-                TaskManagerCommand::RequestTaskReceiver { plan_id } => {
+                TaskManagerCommand::RequestTaskReceiver { plan_id, worker_id, start_immediately } => {
+                    info!("Task request receiver requested for plan {}!", plan_id);
                     let response = if let Some(task_sender) = self.task_senders.get(&plan_id) {
-                        TaskManagerResponse::TaskChannel { plan_id, task_sender: task_sender.clone() }
+                        TaskManagerResponse::TaskChannel { plan_id, task_sender: task_sender.clone(), worker_id, start_immediately }
                     } else {
                         TaskManagerResponse::Error { message: format!("No task sender found for plan {}", plan_id) }
                     };
-
+                    info!("Response: {:?}", response);
                     if let Err(e) = self.resp_tx.send(response) {
                         error!("Failed to send task manager response! Error: {}", e);
                     }

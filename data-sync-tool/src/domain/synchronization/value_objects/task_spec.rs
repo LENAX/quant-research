@@ -2,7 +2,7 @@
 //! Contains the necessary data of performing data synchronization
 
 use std::{
-    collections::HashMap, error::Error, hash::Hash, str::FromStr, string::ParseError, sync::Arc,
+    collections::HashMap, error::Error, str::FromStr,
 };
 
 use derivative::Derivative;

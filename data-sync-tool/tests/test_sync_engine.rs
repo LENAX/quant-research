@@ -1,10 +1,10 @@
 use data_sync_tool::{infrastructure::commands::Plan, domain::synchronization::value_objects::task_spec::TaskSpecification};
 use uuid::Uuid;
-use reqwest::{Url, Method};
-use serde_json::Value;
+
+
 use std::collections::HashMap;
 
-fn create_mock_plan() -> Plan {
+pub fn create_mock_plan() -> Plan {
     // Generate a random UUID for the plan
     let plan_id = Uuid::new_v4();
 
@@ -19,7 +19,9 @@ fn create_mock_plan() -> Plan {
         None,
     );
     if let Ok(get_task) = get_task_result {
-        task_specs.push(get_task);
+        for _ in 0..10 {
+            task_specs.push(get_task.clone());
+        }
     }
 
     // Define a POST request task with a simple JSON payload
@@ -37,7 +39,9 @@ fn create_mock_plan() -> Plan {
         Some(post_payload),
     );
     if let Ok(post_task) = post_task_result {
-        task_specs.push(post_task);
+        for _ in 0..10 {
+            task_specs.push(post_task.clone());
+        }
     }
 
     // Construct the Plan with the generated tasks
@@ -49,48 +53,51 @@ fn create_mock_plan() -> Plan {
 
 #[cfg(test)]
 mod integration_tests {
-    // use std::thread::sleep;
-
-    use super::*;
-    use data_sync_tool::infrastructure::{sync_engine::init_engine, commands::Plan};
+    use data_sync_tool::infrastructure::sync_engine::init_engine;
+    use log::info;
     use tokio::time::{timeout, Duration, sleep};
-    // use fast_log::config::Config;
+    use fast_log::config::Config;
+
+    use crate::create_mock_plan;
     use pretty_env_logger;
 
     #[tokio::test]
     async fn test_web_api_integration() {
-        // fast_log::init(Config::new().console().chan_len(Some(100000))).unwrap();
-        pretty_env_logger::init();
+        fast_log::init(Config::new().console().chan_len(Some(100000))).unwrap();
+        // pretty_env_logger::init();
         
         // Initialize the engine
         let mut engine = init_engine(Some(4), Some(100), Some(Duration::from_secs(5))).await;
 
-        sleep(Duration::from_secs(10)).await;
+        sleep(Duration::from_secs(1)).await;
 
         // Create a plan (Example, replace with actual plan creation)
-        // let plan = create_mock_plan();
+        let plan = create_mock_plan();
+        info!("Created mock plan: {:?}", plan);
 
         // // Add a plan and start it immediately
-        // let add_plan_result = timeout(Duration::from_secs(10), 
-        //     engine.add_plan(plan, true)).await.expect("Timeout while adding plan");
         
-        // assert!(add_plan_result.is_ok(), "Failed to add plan");
+        let add_plan_result = timeout(Duration::from_secs(10), 
+            engine.add_plan(plan, true)).await.expect("Timeout while adding plan");
+        
+        info!("add_plan_result: {:?}", add_plan_result);
+        assert!(add_plan_result.is_ok(), "Failed to add plan");
 
         // let plan_id = add_plan_result.unwrap();
 
-        // // Check if the plan started successfully
-        // let start_sync_result = timeout(Duration::from_secs(10), 
-        //     engine.start_sync()).await.expect("Timeout while starting sync");
+        // Check if the plan started successfully
+        // FIXME: Start sync does not work
+        let start_sync_result = timeout(Duration::from_secs(10), 
+            engine.start_sync()).await.expect("Timeout while starting sync");
 
-        // assert!(start_sync_result.is_ok(), "Failed to start synchronization");
+        assert!(start_sync_result.is_ok(), "Failed to start synchronization");
 
         // // Optionally, check for worker results
         // // ...
-
+        sleep(Duration::from_secs(30)).await;
         // // Finally, shutdown the engine
         let shutdown_result = timeout(Duration::from_secs(10), 
             engine.shutdown()).await.expect("Timeout while shutting down");
-        sleep(Duration::from_secs(10)).await;
-        // assert!(shutdown_result.is_ok(), "Failed to shut down engine");
+        assert!(shutdown_result.is_ok(), "Failed to shut down engine");
     }
 }

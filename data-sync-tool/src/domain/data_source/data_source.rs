@@ -1,9 +1,9 @@
 //! Data Source Domain Object Definition
 
 use chrono::prelude::*;
-use fake::Fake;
+
 use getset::{CopyGetters, Getters, MutGetters, Setters};
-use std::{cell::RefCell, collections::HashMap, error, fmt, sync::Arc};
+use std::{collections::HashMap, error, fmt};
 use uuid::Uuid;
 
 use super::{dataset::Dataset, value_object::local_storage::LocalStorage};

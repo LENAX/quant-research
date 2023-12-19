@@ -3,10 +3,9 @@ use log::{debug, error, info};
 use reqwest::Client;
 use serde_json::Value;
 use tokio::{
-    select,
     sync::{broadcast, mpsc},
     task::JoinHandle,
-    time::{sleep, timeout, Duration},
+    time::{sleep, Duration},
 };
 
 use uuid::Uuid;
@@ -154,6 +153,7 @@ impl Worker {
         self.task_rx = Some(task_receiver);
 
         if start_immediately {
+            info!("Worker {} starts working on plan {}", self.id, plan_id);
             self.start_syncing_plan(
                 plan_id,
                 self.task_manager_cmd_tx.clone(),
@@ -225,7 +225,7 @@ impl Worker {
                     Ok(resp) => match resp {
                         TaskRequestResponse::NewTask(task) => {
                             debug!("Received a task: {:#?}", &task);
-                            Worker::process_tasks(&task, &client, &result_sender);
+                            Worker::process_tasks(&task, &client, &result_sender).await;
                         }
                         TaskRequestResponse::NoTaskLeft => {
                             info!("No task left. Sync completed.");
@@ -253,6 +253,7 @@ impl Worker {
 
     // Process tasks by sending request to remote data provider
     async fn process_tasks(task: &Task, client: &Client, result_tx: &mpsc::Sender<WorkerResult>) {
+        info!("Worker is processing task {:#?}", task);
         if let Some(request_builder) = task.spec().build_request(client) {
             match request_builder.send().await {
                 Ok(resp) => {
@@ -260,6 +261,7 @@ impl Worker {
                     let parse_result: Result<Value, reqwest::Error> = resp.json().await;
                     match parse_result {
                         Ok(data) => {
+                            info!("Requested data: {:?}",data);
                             let task_result = WorkerResult::TaskCompleted {
                                 plan_id: *task.plan_id(),
                                 task_id: *task.task_id(),

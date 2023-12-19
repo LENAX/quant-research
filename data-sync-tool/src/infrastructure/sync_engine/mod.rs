@@ -18,22 +18,18 @@ pub mod worker;
 
 use std::time::Duration;
 
-use getset::{Getters, MutGetters};
 use log::info;
-use tokio::sync::{broadcast::Receiver, mpsc};
+use tokio::{sync::mpsc, time::sleep};
 
 use crate::infrastructure::sync_engine::engine_proxy::EngineProxy;
 
 use self::{
-    engine::{
-        commands::{EngineCommands, EngineResponse},
-        engine::SyncEngine,
-    },
+    engine::engine::SyncEngine,
     task_manager::task_manager::TaskManager,
     worker::{commands::WorkerResult, supervisor::Supervisor},
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ComponentState {
     Created,
     Running,
@@ -73,16 +69,19 @@ pub async fn init_engine(
     let _ = tokio::spawn(async move {
         task_manager.run().await;
     });
+    // sleep(Duration::from_secs(1)).await;
 
     info!("Start running supervisor...");
     let _ = tokio::spawn(async move {
         supervisor.run().await;
     });
+    // sleep(Duration::from_secs(1)).await;
 
     info!("Start running engine...");
     let _ = tokio::spawn(async move {
         sync_engine.run().await;
     });
+    // sleep(Duration::from_secs(1)).await;
     info!("Engine initialized!");
 
     return EngineProxy::new(engine_cmd_sender, engine_resp_receiver, worker_result_rx);

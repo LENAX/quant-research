@@ -5,7 +5,7 @@ use serde_json::Value;
 use tokio::{
     sync::{broadcast, mpsc},
     task::JoinHandle,
-    time::{sleep, Duration},
+    time::{interval, sleep, Duration},
 };
 
 use uuid::Uuid;
@@ -123,7 +123,10 @@ impl Worker {
 
     // Handling shutdown
     async fn handle_shutdown(&mut self) {
-        info!("Worker {} received shutdown command! Try to shutdown gracefully...", self.id);
+        info!(
+            "Worker {} received shutdown command! Try to shutdown gracefully...",
+            self.id
+        );
 
         if let WorkerState::Working { task_handle, .. } = &self.state {
             task_handle.abort();
@@ -133,8 +136,12 @@ impl Worker {
         if let Err(e) = self
             .resp_tx
             .send(WorkerResponse::ShutdownComplete(self.id))
-            .await {
-            error!("Worker {} failed to send shutdown response! Error: {}", self.id, e);
+            .await
+        {
+            error!(
+                "Worker {} failed to send shutdown response! Error: {}",
+                self.id, e
+            );
         }
 
         info!("Worker {} exitted.", self.id);
@@ -164,7 +171,15 @@ impl Worker {
         } else {
             self.state = WorkerState::Ready { plan_id };
             info!("Worker {} is ready to work on plan {}.", self.id, plan_id);
-            if let Err(e) = self.resp_tx.send(WorkerResponse::PlanAssigned { worker_id: self.id, plan_id, sync_started: false }).await {
+            if let Err(e) = self
+                .resp_tx
+                .send(WorkerResponse::PlanAssigned {
+                    worker_id: self.id,
+                    plan_id,
+                    sync_started: false,
+                })
+                .await
+            {
                 error!("Failed to send plan assignment response! Error: {}", e);
             }
         }
@@ -212,9 +227,15 @@ impl Worker {
     ) {
         let result_sender = self.result_tx.clone();
         let client = self.http_client.clone();
+
+        // Define the rate limit (e.g., 100 tasks per minute)
+        let rate_limit =
+            Duration::from_millis((60000 / self.request_per_minute).try_into().unwrap());
+        let mut interval = interval(rate_limit);
+
         let task_handle: JoinHandle<Result<(), WorkerError>> = tokio::spawn(async move {
             loop {
-                // TODO: Add rate limiting
+                interval.tick().await; // Wait for the next tick of the interval
 
                 if let Err(e) = task_manager_cmd_tx
                     .send(TaskManagerCommand::RequestTask(plan_id))
@@ -244,7 +265,6 @@ impl Worker {
                         return Err(WorkerError::TaskReceiverChannelClosed);
                     }
                 }
-                sleep(Duration::from_millis(500)).await;
             }
         });
 
@@ -253,14 +273,24 @@ impl Worker {
             task_handle,
         };
 
-        if let Err(e) = self.resp_tx.send(WorkerResponse::StartOk { worker_id: self.id, plan_id }).await {
+        if let Err(e) = self
+            .resp_tx
+            .send(WorkerResponse::StartOk {
+                worker_id: self.id,
+                plan_id,
+            })
+            .await
+        {
             error!("Failed to send plan assignment response! Error: {}", e);
         }
-
     }
 
     // Process tasks by sending request to remote data provider
-    async fn process_tasks(task: &Task, client: &Client, result_tx: &broadcast::Sender<WorkerResult>) {
+    async fn process_tasks(
+        task: &Task,
+        client: &Client,
+        result_tx: &broadcast::Sender<WorkerResult>,
+    ) {
         info!("Worker is processing task {:?}", task);
         if let Some(request_builder) = task.spec().build_request(client) {
             match request_builder.send().await {
@@ -269,7 +299,7 @@ impl Worker {
                     let parse_result: Result<Value, reqwest::Error> = resp.json().await;
                     match parse_result {
                         Ok(data) => {
-                            info!("Requested data: {:?}",data);
+                            info!("Requested data: {:?}", data);
                             let task_result = WorkerResult::TaskCompleted {
                                 plan_id: *task.plan_id(),
                                 task_id: *task.task_id(),

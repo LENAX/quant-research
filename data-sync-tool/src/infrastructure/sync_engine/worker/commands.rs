@@ -13,6 +13,8 @@ pub enum SupervisorCommand {
     Shutdown,
     AssignPlan { plan_id: PlanId , start_immediately: bool },
     CancelPlan(Uuid),
+    StartSyncPlan(Uuid),
+    CancelSyncPlan(Uuid),
     StartAll,
     CancelAll,
     // TODO: Worker Management

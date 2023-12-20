@@ -157,7 +157,13 @@ impl Supervisor {
                         },
                         SupervisorCommand::CancelAll => {
                             self.handle_cancel_all().await;
-                        }
+                        },
+                        SupervisorCommand::StartSyncPlan(plan_id) => {
+                            self.handle_start_sync_plan(plan_id).await;
+                        },
+                        SupervisorCommand::CancelSyncPlan(plan_id) => {
+                            self.handle_cancel_sync_plan(plan_id).await;
+                        },
                     }
                 },
                 response_result = self.worker_resp_rx.recv() => {
@@ -188,6 +194,46 @@ impl Supervisor {
         }
 
         info!("Supervisor is down! Exit.");
+    }
+
+    async fn handle_start_sync_plan(&mut self, plan_id: Uuid) {
+        info!("Tell worker to start syncing plan {}", plan_id);
+        let worker_id = self.worker_assignment.iter_mut().find_map(|(id, state)| {
+            if *state == WorkerAssignmentState::PlanAssigned(plan_id) {
+                Some(*id)
+            } else {
+                None
+            }
+        });
+
+        if let Some(worker_id) = worker_id {
+            if let Some(sender) = self.worker_cmd_tx.get(&worker_id) {
+                let _ = sender.send(WorkerCommand::StartSync).await;
+            }
+        } else {
+            // If no worker is available, consider handling it (e.g., logging, spawning a new worker, etc.)
+            error!("No available worker for plan {}", plan_id);
+        }
+    }
+
+    async fn handle_cancel_sync_plan(&mut self, plan_id: Uuid) {
+        info!("Tell worker to cancel syncing plan {}", plan_id);
+        let worker_id = self.worker_assignment.iter_mut().find_map(|(id, state)| {
+            if *state == WorkerAssignmentState::PlanAssigned(plan_id) {
+                Some(*id)
+            } else {
+                None
+            }
+        });
+
+        if let Some(worker_id) = worker_id {
+            if let Some(sender) = self.worker_cmd_tx.get(&worker_id) {
+                let _ = sender.send(WorkerCommand::CancelPlan(plan_id)).await;
+            }
+        } else {
+            // If no worker is available, consider handling it (e.g., logging, spawning a new worker, etc.)
+            error!("No available worker for plan {}", plan_id);
+        }
     }
 
     async fn handle_task_manager_response(&mut self, tm_resp: TaskManagerResponse) {

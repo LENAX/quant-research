@@ -87,42 +87,12 @@ impl SyncEngine {
                     }
                     // break;
                 },
-                // tm_response_result = timeout(self.response_timeout, self.task_manager_resp_rx.recv()) => {
-                //     match tm_response_result {
-                //         Ok(tm_response) => {
-                //             // Handle the command...
-                //             match tm_response {
-                //                 Ok(response) => { self.handle_task_manager_response(response).await; },
-                //                 Err(e) => { error!("{}", e)}
-                //             }
-                //         },
-                //         Err(_) => {
-                //             // Timeout occurred...
-                //             error!("Timeout while waiting for task manager response");
-                //         }
-                //     }
-                // },
                 tm_response = self.task_manager_resp_rx.recv() => {
                     match tm_response {
                         Ok(response) => { self.handle_task_manager_response(response).await; },
                         Err(e) => { error!("{}", e)}
                     }
                 },
-                // supervisor_response_result = timeout(self.response_timeout, self.supervisor_resp_rx.recv()) => {
-                //     match supervisor_response_result {
-                //         Ok(sp_response) => {
-                //             // Handle the command...
-                //             match sp_response {
-                //                 Some(response) => { self.handle_supervisor_response(response).await; },
-                //                 None => { error!("Received no response from supervisor!")}
-                //             }
-                //         },
-                //         Err(_) => {
-                //             // Timeout occurred...
-                //             error!("Timeout while waiting for supervisor response");
-                //         }
-                //     }
-                // },
                 sp_response = self.supervisor_resp_rx.recv() => {
                     match sp_response {
                         Some(response) => { self.handle_supervisor_response(response).await; },
@@ -178,8 +148,14 @@ impl SyncEngine {
                 info!("Stop syncing...");
                 let _ = self.supervisor_tx.send(SupervisorCommand::CancelAll).await;
             }
-            EngineCommands::StartPlan(_plan_id) => todo!(),
-            EngineCommands::CancelPlan(_plan_id) => todo!(),
+            EngineCommands::StartPlan(plan_id) => {
+                info!("Start syncing plan {}", plan_id);
+                let _ = self.supervisor_tx.send(SupervisorCommand::StartSyncPlan(plan_id)).await;
+            },
+            EngineCommands::CancelPlan(plan_id) => {
+                info!("Cancel syncing plan {}", plan_id);
+                let _ = self.supervisor_tx.send(SupervisorCommand::CancelSyncPlan(plan_id)).await;
+            },
         }
     }
 

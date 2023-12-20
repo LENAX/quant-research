@@ -12,7 +12,7 @@
 //! 6. Task: One unit of work, carrying specification for workers
 
 pub mod engine;
-pub mod engine_proxy;
+pub mod engine_controller;
 pub mod task_manager;
 pub mod worker;
 
@@ -21,7 +21,7 @@ use std::time::Duration;
 use log::info;
 use tokio::{sync::{mpsc, broadcast}, time::sleep};
 
-use crate::infrastructure::sync_engine::engine_proxy::EngineController;
+use crate::infrastructure::sync_engine::engine_controller::{SyncEngineControl, EngineController};
 
 use self::{
     engine::engine::SyncEngine,
@@ -41,7 +41,7 @@ pub async fn init_engine(
     n_workers: Option<usize>,
     channel_size: Option<usize>,
     engine_timeout: Option<Duration>,
-) -> EngineController {
+) -> impl SyncEngineControl {
     let channel_size = channel_size.unwrap_or(100);
 
     let (task_manager, task_manager_cmd_tx, task_manager_resp_tx, task_manager_resp_rx) =

@@ -156,6 +156,10 @@ impl SyncEngine {
                 info!("Cancel syncing plan {}", plan_id);
                 let _ = self.supervisor_tx.send(SupervisorCommand::CancelSyncPlan(plan_id)).await;
             },
+            EngineCommands::PausePlan(plan_id) => {
+                info!("Pause syncing plan {}", plan_id);
+                let _ = self.supervisor_tx.send(SupervisorCommand::PauseSyncPlan(plan_id)).await;
+            },
         }
     }
 

@@ -116,7 +116,8 @@ impl Worker {
                         .await
                 }
                 WorkerCommand::StartSync => self.handle_start_sync().await,
-                WorkerCommand::CancelPlan(plan_id) => self.handle_cancel_plan(plan_id).await, // ... other commands ...
+                WorkerCommand::CancelPlan(plan_id) => self.handle_cancel_plan(plan_id).await,
+                WorkerCommand::PauseSync => todo!(), // ... other commands ...
             }
         }
     }

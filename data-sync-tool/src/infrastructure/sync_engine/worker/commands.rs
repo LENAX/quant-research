@@ -15,6 +15,7 @@ pub enum SupervisorCommand {
     CancelPlan(Uuid),
     StartSyncPlan(Uuid),
     CancelSyncPlan(Uuid),
+    PauseSyncPlan(Uuid),
     StartAll,
     CancelAll,
     // TODO: Worker Management
@@ -46,6 +47,7 @@ pub enum WorkerCommand {
     Shutdown,
     AssignPlan { plan_id: Uuid, task_receiver: broadcast::Receiver<TaskRequestResponse>, start_immediately: bool },
     StartSync,
+    PauseSync,
     CancelPlan(Uuid)
 }
 
@@ -64,7 +66,8 @@ pub enum WorkerResponse {
     PlanAssigned { worker_id: WorkerId, plan_id: PlanId, sync_started: bool },
     PlanCancelled { worker_id: WorkerId, plan_id: PlanId },
     StartOk { worker_id: WorkerId, plan_id: PlanId },
-    StartFailed { worker_id: WorkerId, reason: String }
+    StartFailed { worker_id: WorkerId, reason: String },
+    PauseOk { worker_id: WorkerId, plan_id: PlanId }
 }
 
 // Multiple workers will send result through an mpsc channel 

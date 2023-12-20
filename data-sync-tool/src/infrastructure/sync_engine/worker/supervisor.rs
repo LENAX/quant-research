@@ -164,6 +164,9 @@ impl Supervisor {
                         SupervisorCommand::CancelSyncPlan(plan_id) => {
                             self.handle_cancel_sync_plan(plan_id).await;
                         },
+                        SupervisorCommand::PauseSyncPlan(plan_id) => {
+                            todo!()
+                        }
                     }
                 },
                 response_result = self.worker_resp_rx.recv() => {
@@ -489,7 +492,10 @@ impl Supervisor {
             }
             WorkerResponse::StartFailed { worker_id, reason } => {
                 error!("Failed to start worker {} because {}", worker_id, reason)
-            } // ... handle other worker responses ...
+            }
+            WorkerResponse::PauseOk { worker_id, plan_id } => {
+                todo!()
+            }
         }
 
         // Send a response to the client module if necessary

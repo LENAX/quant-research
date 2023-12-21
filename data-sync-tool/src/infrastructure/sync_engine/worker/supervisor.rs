@@ -165,7 +165,7 @@ impl Supervisor {
                             self.handle_cancel_sync_plan(plan_id).await;
                         },
                         SupervisorCommand::PauseSyncPlan(plan_id) => {
-                            todo!()
+                            self.handle_pause_sync_plan(plan_id).await;
                         }
                     }
                 },
@@ -219,17 +219,22 @@ impl Supervisor {
         }
     }
 
-    async fn handle_cancel_sync_plan(&mut self, plan_id: Uuid) {
-        info!("Tell worker to cancel syncing plan {}", plan_id);
+    fn find_worker_by_plan(&mut self, plan_id: Uuid, assignment_state: WorkerAssignmentState) -> Option<Uuid> {
         let worker_id = self.worker_assignment.iter_mut().find_map(|(id, state)| {
-            if *state == WorkerAssignmentState::PlanAssigned(plan_id) {
+            if *state == assignment_state {
                 Some(*id)
             } else {
                 None
             }
         });
 
-        if let Some(worker_id) = worker_id {
+        worker_id
+    }
+
+    async fn handle_cancel_sync_plan(&mut self, plan_id: Uuid) {
+        info!("Tell worker to cancel syncing plan {}", plan_id);
+
+        if let Some(worker_id) = self.find_worker_by_plan(plan_id, WorkerAssignmentState::PlanAssigned(plan_id)) {
             if let Some(sender) = self.worker_cmd_tx.get(&worker_id) {
                 let _ = sender.send(WorkerCommand::CancelPlan(plan_id)).await;
             }
@@ -238,6 +243,24 @@ impl Supervisor {
             error!("No available worker for plan {}", plan_id);
         }
     }
+
+    async fn handle_pause_sync_plan(&mut self, plan_id: Uuid) {
+        // Find the worker handling this plan and send the pause command
+        if let Some(worker_id) = self.find_worker_by_plan(plan_id, WorkerAssignmentState::Running(plan_id)) {
+            if let Some(worker_tx) = self.worker_cmd_tx.get(&worker_id) {
+                if let Err(e) = worker_tx.send(WorkerCommand::PauseSync).await {
+                    error!("Failed to send pause sync plan command to worker {}: {}", worker_id, e);
+                } else {
+                    info!("Sent pause sync plan command for plan {} to worker {}", plan_id, worker_id);
+                }
+            } else {
+                error!("Worker command sender not found for worker {}", worker_id);
+            }
+        } else {
+            error!("No worker found for plan {}", plan_id);
+        }
+    }
+    
 
     async fn handle_task_manager_response(&mut self, tm_resp: TaskManagerResponse) {
         match tm_resp {
@@ -496,6 +519,9 @@ impl Supervisor {
             WorkerResponse::PauseOk { worker_id, plan_id } => {
                 todo!()
             }
+            WorkerResponse::Error(e) => {
+                error!("{}", e);
+            },
         }
 
         // Send a response to the client module if necessary

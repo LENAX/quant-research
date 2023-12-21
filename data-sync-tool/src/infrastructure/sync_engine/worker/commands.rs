@@ -67,7 +67,8 @@ pub enum WorkerResponse {
     PlanCancelled { worker_id: WorkerId, plan_id: PlanId },
     StartOk { worker_id: WorkerId, plan_id: PlanId },
     StartFailed { worker_id: WorkerId, reason: String },
-    PauseOk { worker_id: WorkerId, plan_id: PlanId }
+    PauseOk { worker_id: WorkerId, plan_id: PlanId },
+    Error(String)
 }
 
 // Multiple workers will send result through an mpsc channel 

@@ -37,3 +37,4 @@ __pycache__/
 *$py.class
 fake-market-feed/__pycache__/**
 fake-market-feed/__pycache__/app.cpython-310.pyc
+pwsh10k.omp.json

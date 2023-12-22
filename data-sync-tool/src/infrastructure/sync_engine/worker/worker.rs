@@ -118,12 +118,18 @@ impl Worker {
                 }
                 WorkerCommand::StartSync => self.handle_start_sync().await,
                 WorkerCommand::CancelPlan(plan_id) => self.handle_cancel_plan(plan_id).await,
-                WorkerCommand::PauseSync => {
-                    match self.assigned_plan_id {
-                        Some(plan_id) => { self.handle_pause_sync_plan(plan_id).await; },
-                        None => { self.resp_tx.send(WorkerResponse::Error("No plan assigned while try to pause a plan".to_string())).await; }
+                WorkerCommand::PauseSync => match self.assigned_plan_id {
+                    Some(plan_id) => {
+                        self.handle_pause_sync_plan(plan_id).await;
                     }
-                }
+                    None => {
+                        self.resp_tx
+                            .send(WorkerResponse::Error(
+                                "No plan assigned while try to pause a plan".to_string(),
+                            ))
+                            .await;
+                    }
+                },
             }
         }
     }
@@ -232,11 +238,13 @@ impl Worker {
                     task_handle.abort();
                     info!("Worker {} paused plan {}", self.id, plan_id);
                     self.state = WorkerState::Paused(plan_id);
+                    if let Err(e) = self.resp_tx.send(WorkerResponse::PauseOk { worker_id: self.id, plan_id: plan_id }).await {
+                        error!("Error: {}", e);
+                    }
                 }
             }
         }
     }
-    
 
     // Starting the task processing loop for a specific plan
     async fn start_syncing_plan(

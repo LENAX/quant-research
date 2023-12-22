@@ -517,7 +517,7 @@ impl Supervisor {
                 error!("Failed to start worker {} because {}", worker_id, reason)
             }
             WorkerResponse::PauseOk { worker_id, plan_id } => {
-                todo!()
+                self.worker_assignment.insert(worker_id, WorkerAssignmentState::PlanAssigned(plan_id));
             }
             WorkerResponse::Error(e) => {
                 error!("{}", e);

@@ -8,7 +8,7 @@ use crate::domain::synchronization::value_objects::task_spec::TaskSpecification;
 
 type PlanId = Uuid;
 
-#[derive(Debug, Getters)]
+#[derive(Debug, Getters, Clone)]
 #[getset(get = "pub")]
 pub struct Plan {
     // simplified sync plan

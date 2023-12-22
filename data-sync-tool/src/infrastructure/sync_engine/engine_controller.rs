@@ -152,7 +152,10 @@ impl SyncEngineControl for EngineController {
     }
 
     async fn pause_sync(&mut self) -> Result<(), String> {
-        todo!()
+        self.engine_command_tx
+            .send(EngineCommands::CancelSync)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     async fn start_plan(&mut self, plan_id: Uuid) -> Result<(), String> {
@@ -174,7 +177,10 @@ impl SyncEngineControl for EngineController {
     }
 
     async fn pause_sync_plan(&mut self, plan_id: Uuid) -> Result<(), String> {
-        todo!()
+        self.engine_command_tx
+            .send(EngineCommands::PausePlan(plan_id))
+            .await
+            .map_err(|e| e.to_string())
     }
 
     

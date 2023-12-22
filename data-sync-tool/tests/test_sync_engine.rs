@@ -70,8 +70,8 @@ mod integration_tests {
 
     #[tokio::test]
     async fn test_web_api_integration() {
-        // fast_log::init(Config::new().console().chan_len(Some(100000))).unwrap();
-        pretty_env_logger::init();
+        fast_log::init(Config::new().console().chan_len(Some(100000))).unwrap();
+        // pretty_env_logger::init();
         
         // Initialize the engine
         let mut engine = init_engine(Some(4), Some(100), Some(Duration::from_secs(5))).await;
@@ -92,9 +92,9 @@ mod integration_tests {
         ];
 
         // // Add a plan and start it immediately
-        for plan in plans {
+        for plan in &plans {
             let add_plan_result = timeout(Duration::from_secs(10), 
-            engine.add_plan(plan, false)).await.expect("Timeout while adding plan");
+            engine.add_plan(plan.clone(), false)).await.expect("Timeout while adding plan");
         
             info!("add_plan_result: {:?}", add_plan_result);
             assert!(add_plan_result.is_ok(), "Failed to add plan");
@@ -109,6 +109,28 @@ mod integration_tests {
             engine.start_sync()).await.expect("Timeout while starting sync");
 
         assert!(start_sync_result.is_ok(), "Failed to start synchronization");
+
+
+        sleep(Duration::from_secs(2)).await;
+
+        // test pause plan
+        for plan in &plans {
+            let pause_sync_result = timeout(
+                Duration::from_secs(10), 
+            engine.pause_sync_plan(plan.plan_id)).await.expect("Timeout while starting sync");
+            assert!(pause_sync_result.is_ok(), "Failed to start synchronization");
+        }
+
+        sleep(Duration::from_secs(10)).await;
+
+        info!("Resume syncing...");
+
+        let start_sync_result = timeout(Duration::from_secs(10), 
+            engine.start_sync()).await.expect("Timeout while starting sync");
+
+        assert!(start_sync_result.is_ok(), "Failed to start synchronization");
+
+        // FIXME: Resume not correctly handled
 
         // // Optionally, check for worker results
         // // ...

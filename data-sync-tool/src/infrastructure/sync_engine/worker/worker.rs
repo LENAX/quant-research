@@ -38,6 +38,7 @@ pub enum WorkerState {
         // schedule syncing to a separate task
         task_handle: JoinHandle<Result<(), WorkerError>>,
     },
+    Paused(Uuid),
     Stopped,
 }
 
@@ -116,7 +117,13 @@ impl Worker {
                         .await
                 }
                 WorkerCommand::StartSync => self.handle_start_sync().await,
-                WorkerCommand::CancelPlan(plan_id) => self.handle_cancel_plan(plan_id).await, // ... other commands ...
+                WorkerCommand::CancelPlan(plan_id) => self.handle_cancel_plan(plan_id).await,
+                WorkerCommand::PauseSync => {
+                    match self.assigned_plan_id {
+                        Some(plan_id) => { self.handle_pause_sync_plan(plan_id).await; },
+                        None => { self.resp_tx.send(WorkerResponse::Error("No plan assigned while try to pause a plan".to_string())).await; }
+                    }
+                }
             }
         }
     }
@@ -217,6 +224,19 @@ impl Worker {
             }
         }
     }
+
+    async fn handle_pause_sync_plan(&mut self, plan_id: Uuid) {
+        if let Some(assigned_plan_id) = self.assigned_plan_id {
+            if assigned_plan_id == plan_id {
+                if let WorkerState::Working { task_handle, .. } = &self.state {
+                    task_handle.abort();
+                    info!("Worker {} paused plan {}", self.id, plan_id);
+                    self.state = WorkerState::Paused(plan_id);
+                }
+            }
+        }
+    }
+    
 
     // Starting the task processing loop for a specific plan
     async fn start_syncing_plan(

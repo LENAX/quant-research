@@ -53,7 +53,7 @@ pub fn create_mock_plan() -> Plan {
 
 #[cfg(test)]
 mod integration_tests {
-    use data_sync_tool::infrastructure::{sync_engine::init_engine, worker_commands::WorkerResult};
+    use data_sync_tool::infrastructure::{sync_engine::{init_engine, engine_controller::SyncEngineControl}, worker_commands::WorkerResult};
     use log::info;
     use tokio::{time::{timeout, Duration, sleep}, sync::broadcast};
     use fast_log::config::Config;

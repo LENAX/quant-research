@@ -30,7 +30,8 @@ pub enum EngineCommands {
     StartSync,
     CancelSync,
     StartPlan(Uuid),
-    CancelPlan(Uuid)
+    CancelPlan(Uuid),
+    PausePlan(Uuid)
 }
 
 

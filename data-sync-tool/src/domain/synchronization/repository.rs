@@ -2,7 +2,7 @@
 
 use crate::domain::repository::Repository;
 
-use super::{sync_plan::{SyncPlan, SyncFrequency}, dtos::{SyncPlanQueryDTO, SyncPlanUpdateDTO}};
+use super::{sync_plan::{SyncPlan}, dtos::{SyncPlanQueryDTO, SyncPlanUpdateDTO}};
 use async_trait::async_trait;
 
 

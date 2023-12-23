@@ -1,7 +1,7 @@
 use chrono::{Local, DateTime};
 use getset::{Getters, Setters, MutGetters};
 use uuid::Uuid;
-use super::sync_plan::SyncFrequency;
+use super::{sync_plan::SyncFrequency, value_objects::sync_config::SyncConfig, sync_task::SyncTask};
 
 #[derive(Debug, Getters, Setters, MutGetters)]
 #[getset(get, set, get_mut)]
@@ -84,32 +84,34 @@ impl SyncPlanQueryDTO {
 }
 
 
-#[derive(Debug, Getters, Setters, MutGetters)]
+#[derive(Debug, Default, Getters, Setters, MutGetters)]
 #[getset(get, set, get_mut)]
 pub struct SyncPlanUpdateDTO {
-    id: Uuid, // Typically required to identify the plan to update
+    id: Option<Uuid>, // Typically required to identify the plan to update
     name: Option<String>,
     description: Option<String>,
     trigger_time: Option<DateTime<Local>>,
     frequency: Option<SyncFrequency>,
     active: Option<bool>,
-    // ... other fields that might be updatable
+    sync_config: Option<SyncConfig>,
+    tasks: Option<Vec<SyncTask>>,
+    datasource_id: Option<Uuid>,
+    datasource_name: Option<String>,
+    dataset_id: Option<Uuid>,
+    dataset_name: Option<String>,
+    param_template_id: Option<Uuid>,
 }
 
 impl SyncPlanUpdateDTO {
-    pub fn new(id: Uuid) -> Self {
-        Self {
-            id,
-            name: None,
-            description: None,
-            trigger_time: None,
-            frequency: None,
-            active: None,
-            // ... Initialize other fields as None
-        }
+    pub fn new() -> Self {
+        Self::default()
     }
 
-    // Builder methods for each updatable field
+    pub fn with_id(mut self, id: Uuid) -> Self {
+        self.id = Some(id);
+        self
+    }
+
     pub fn with_name(mut self, name: String) -> Self {
         self.name = Some(name);
         self
@@ -135,10 +137,40 @@ impl SyncPlanUpdateDTO {
         self
     }
 
-    // ... Additional builder methods for other updatable fields
+    pub fn with_sync_config(mut self, sync_config: SyncConfig) -> Self {
+        self.sync_config = Some(sync_config);
+        self
+    }
 
-    // Getters or setters for accessing or modifying the fields
-    // Depending on your framework or application structure, you might need to add getter methods
-    // For simplicity, I'll add one example getter method:
-    // ... additional getters or utility methods as necessary
+    pub fn with_tasks(mut self, tasks: Vec<SyncTask>) -> Self {
+        self.tasks = Some(tasks);
+        self
+    }
+
+    pub fn with_datasource_id(mut self, datasource_id: Uuid) -> Self {
+        self.datasource_id = Some(datasource_id);
+        self
+    }
+
+    pub fn with_datasource_name(mut self, datasource_name: String) -> Self {
+        self.datasource_name = Some(datasource_name);
+        self
+    }
+
+    pub fn with_dataset_id(mut self, dataset_id: Uuid) -> Self {
+        self.dataset_id = Some(dataset_id);
+        self
+    }
+
+    pub fn with_dataset_name(mut self, dataset_name: String) -> Self {
+        self.dataset_name = Some(dataset_name);
+        self
+    }
+
+    pub fn with_param_template_id(mut self, param_template_id: Uuid) -> Self {
+        self.param_template_id = Some(param_template_id);
+        self
+    }
+
+    // Add more builder methods as necessary for other fields
 }

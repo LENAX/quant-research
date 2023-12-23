@@ -100,17 +100,12 @@ mod integration_tests {
             assert!(add_plan_result.is_ok(), "Failed to add plan");
         }
 
-
-        // let plan_id = add_plan_result.unwrap();
-
         // Check if the plan started successfully
-        // FIXME: Start sync does not work
         let start_sync_result = timeout(Duration::from_secs(10), 
             engine.start_sync()).await.expect("Timeout while starting sync");
 
         assert!(start_sync_result.is_ok(), "Failed to start synchronization");
-
-
+        
         sleep(Duration::from_secs(2)).await;
 
         // test pause plan
@@ -129,8 +124,6 @@ mod integration_tests {
             engine.start_sync()).await.expect("Timeout while starting sync");
 
         assert!(start_sync_result.is_ok(), "Failed to start synchronization");
-
-        // FIXME: Resume not correctly handled
 
         // // Optionally, check for worker results
         // // ...

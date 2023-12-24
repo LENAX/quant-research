@@ -1,7 +1,7 @@
 // Synchronization Plan Definition
 // Defines when synchronization of a dataset should happend
 
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 use super::{
     custom_errors::TaskCreationError, sync_task::SyncTask, value_objects::sync_config::{SyncConfig, SyncMode},

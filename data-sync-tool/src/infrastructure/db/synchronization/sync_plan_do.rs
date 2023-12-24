@@ -1,4 +1,4 @@
-use sea_orm::{entity::prelude::*, ActiveValue};
+use sea_orm::{entity::prelude::*};
 use uuid::Uuid;
 use chrono::{DateTime, Local};
 

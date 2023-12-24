@@ -5,7 +5,7 @@ use serde_json::Value;
 use tokio::{
     sync::{broadcast, mpsc},
     task::JoinHandle,
-    time::{interval, sleep, Duration},
+    time::{interval, Duration},
 };
 
 use uuid::Uuid;

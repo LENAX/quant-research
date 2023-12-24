@@ -33,7 +33,7 @@ pub enum MQType {
 pub fn create_tokio_mpsc_channel<T>(
     n: usize,
 ) -> (TokioMpscMessageBusSender<T>, TokioMpscMessageBusReceiver<T>) {
-    let (tx, mut rx) = mpsc::channel::<T>(n);
+    let (tx, rx) = mpsc::channel::<T>(n);
     let channel_id = Uuid::new_v4();
     let sender = TokioMpscMessageBusSender::new(channel_id, tx);
     let receiver = TokioMpscMessageBusReceiver::new(channel_id, rx);
@@ -44,7 +44,7 @@ pub fn create_tokio_mpsc_channel<T>(
 pub fn create_tokio_spmc_channel<T: std::clone::Clone>(
     n: usize,
 ) -> (TokioSpmcMessageBusSender<T>, TokioSpmcMessageBusReceiver<T>) {
-    let (tx, mut rx) = broadcast::channel::<T>(n);
+    let (tx, rx) = broadcast::channel::<T>(n);
     let channel_id = Uuid::new_v4();
     let sender = TokioSpmcMessageBusSender::new(channel_id, tx);
     let receiver = TokioSpmcMessageBusReceiver::new(channel_id, rx);
@@ -58,7 +58,7 @@ pub fn create_tokio_broadcasting_channel<T: std::clone::Clone>(
     TokioBroadcastingMessageBusSender<T>,
     TokioBroadcastingMessageBusReceiver<T>,
 ) {
-    let (tx, mut rx) = broadcast::channel::<T>(n);
+    let (tx, rx) = broadcast::channel::<T>(n);
     let channel_id = Uuid::new_v4();
     let sender = TokioBroadcastingMessageBusSender::new(channel_id, tx);
     let receiver = TokioBroadcastingMessageBusReceiver::new(channel_id, rx);
@@ -167,6 +167,6 @@ mod tests {
         let channel_size: usize = 10;
         let mpsc_channel_factory =
             get_mq_factory::<Data>(SupportedMQImpl::InMemoryTokioChannel, MQType::Mpsc);
-        let (mpsc_sender, mpsc_receiver) = mpsc_channel_factory(channel_size);
+        let (_mpsc_sender, _mpsc_receiver) = mpsc_channel_factory(channel_size);
     }
 }

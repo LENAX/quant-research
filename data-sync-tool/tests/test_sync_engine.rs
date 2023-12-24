@@ -59,7 +59,7 @@ mod integration_tests {
     use fast_log::config::Config;
 
     use crate::create_mock_plan;
-    use pretty_env_logger;
+    
 
     async fn process_worker_results(mut results_rx: broadcast::Receiver<WorkerResult>) {
         while let Ok(result) = results_rx.recv().await {

@@ -19,7 +19,7 @@ pub mod worker;
 use std::time::Duration;
 
 use log::info;
-use tokio::{sync::{mpsc, broadcast}, time::sleep};
+use tokio::{sync::{broadcast}};
 
 use crate::infrastructure::sync_engine::engine_controller::{SyncEngineControl, EngineController};
 

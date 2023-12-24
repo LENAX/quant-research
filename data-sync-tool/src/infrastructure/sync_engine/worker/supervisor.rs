@@ -9,7 +9,7 @@ use log::{error, info};
 use tokio::{
     select,
     sync::{broadcast, mpsc},
-    time::{timeout, Duration},
+    time::{Duration},
 };
 use uuid::Uuid;
 
@@ -219,7 +219,7 @@ impl Supervisor {
         }
     }
 
-    fn find_worker_by_plan(&mut self, plan_id: Uuid, assignment_state: WorkerAssignmentState) -> Option<Uuid> {
+    fn find_worker_by_plan(&mut self, assignment_state: WorkerAssignmentState) -> Option<Uuid> {
         let worker_id = self.worker_assignment.iter_mut().find_map(|(id, state)| {
             if *state == assignment_state {
                 Some(*id)
@@ -234,7 +234,7 @@ impl Supervisor {
     async fn handle_cancel_sync_plan(&mut self, plan_id: Uuid) {
         info!("Tell worker to cancel syncing plan {}", plan_id);
 
-        if let Some(worker_id) = self.find_worker_by_plan(plan_id, WorkerAssignmentState::PlanAssigned(plan_id)) {
+        if let Some(worker_id) = self.find_worker_by_plan( WorkerAssignmentState::PlanAssigned(plan_id)) {
             if let Some(sender) = self.worker_cmd_tx.get(&worker_id) {
                 let _ = sender.send(WorkerCommand::CancelPlan(plan_id)).await;
             }
@@ -246,7 +246,7 @@ impl Supervisor {
 
     async fn handle_pause_sync_plan(&mut self, plan_id: Uuid) {
         // Find the worker handling this plan and send the pause command
-        if let Some(worker_id) = self.find_worker_by_plan(plan_id, WorkerAssignmentState::Running(plan_id)) {
+        if let Some(worker_id) = self.find_worker_by_plan(WorkerAssignmentState::Running(plan_id)) {
             if let Some(worker_tx) = self.worker_cmd_tx.get(&worker_id) {
                 if let Err(e) = worker_tx.send(WorkerCommand::PauseSync).await {
                     error!("Failed to send pause sync plan command to worker {}: {}", worker_id, e);

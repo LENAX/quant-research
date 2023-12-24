@@ -511,7 +511,7 @@ impl<T: std::clone::Clone + std::marker::Send + 'static> BroadcastingMessageBusS
         let sender = self.inner_sender();
         match sender {
             Ok(s) => Some(s),
-            Err(e) => None,
+            Err(_e) => None,
         }
     }
 

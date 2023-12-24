@@ -8,7 +8,7 @@ use log::{error, info};
 use tokio::{
     select,
     sync::{broadcast, mpsc},
-    time::{timeout, Duration},
+    time::{Duration},
 };
 
 use crate::infrastructure::sync_engine::{

@@ -10,7 +10,6 @@ use super::{
 };
 use derivative::Derivative;
 use getset::{Getters, Setters};
-use serde_json::Value;
 use uuid::Uuid;
 
 #[derive(Derivative)]
@@ -30,18 +29,12 @@ pub enum SyncStatus {
 #[getset(get = "pub", set = "pub")]
 pub struct SyncTask {
     id: Uuid,
-    sync_plan_id: Option<Uuid>,
-    datasource_id: Option<Uuid>,
-    datasource_name: Option<String>,
-    dataset_id: Option<Uuid>,
-    dataset_name: Option<String>,
+    sync_plan_id: Uuid,
     status: SyncStatus,
     start_time: DateTime<Local>,
     end_time: Option<DateTime<Local>>,
     create_time: DateTime<Local>,
     spec: TaskSpecification, // data payload and specification of the task
-    n_retry_left: usize,
-    result: Option<Value>,
     result_message: Option<String>,
 }
 
@@ -67,15 +60,10 @@ impl SyncTask {
     ) -> Self {
         let mut new_task = Self::default();
         new_task
-            .set_sync_plan_id(Some(sync_plan_id))
-            .set_dataset_id(Some(dataset_id))
-            .set_datasource_id(Some(datasource_id))
-            .set_dataset_name(Some(dataset_name.to_string()))
-            .set_datasource_name(Some(datasource_name.to_string()))
+            .set_sync_plan_id(sync_plan_id)
             .set_spec(task_spec)
             .set_status(SyncStatus::Created)
-            .set_create_time(Local::now())
-            .set_n_retry_left(n_retry_left.unwrap_or(10));
+            .set_create_time(Local::now());
         return new_task;
     }
 
@@ -112,14 +100,6 @@ impl SyncTask {
     pub fn failed(&mut self, end_time: DateTime<Local>) -> SyncStatus {
         self.set_status(SyncStatus::Failed);
         self.set_end_time(Some(end_time));
-
-        if self.n_retry_left > 0 {
-            self.n_retry_left -= 1;
-            info!("Task {} has {} retries left", self.id, self.n_retry_left);
-        } else {
-            info!("Task {} has no retry left!", self.id);
-        }
-
         return self.status;
     }
 

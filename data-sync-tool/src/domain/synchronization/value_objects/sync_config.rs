@@ -1,7 +1,8 @@
 use derivative::Derivative;
 use getset::{Getters, Setters};
+use serde::{Serialize, Deserialize};
 
-#[derive(Derivative, Debug, Clone, Getters, Setters)]
+#[derive(Derivative, Debug, Clone, Getters, Setters, Serialize, Deserialize)]
 #[getset(get = "pub", set = "pub")]
 pub struct RateQuota {
     max_line_per_request: u32,
@@ -15,14 +16,14 @@ pub struct RateQuota {
 
 #[derive(Derivative)]
 #[derivative(Default(bound = ""))]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum SyncMode {
     #[derivative(Default)]
     HttpAPI,
     WebsocketStreaming
 }
 
-#[derive(Derivative, Debug, Clone, Getters, Setters, Default)]
+#[derive(Derivative, Debug, Clone, Getters, Setters, Default, Serialize, Deserialize)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncConfig {
     sync_rate_quota: Option<RateQuota>,

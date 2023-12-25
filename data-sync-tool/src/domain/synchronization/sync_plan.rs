@@ -1,6 +1,7 @@
 // Synchronization Plan Definition
 // Defines when synchronization of a dataset should happend
 
+use core::fmt;
 use std::collections::HashMap;
 
 use super::{
@@ -29,6 +30,14 @@ pub enum SyncFrequency {
     Monthly,
     Quarterly,
     Yearly,
+}
+
+impl fmt::Display for SyncFrequency {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+        // or, alternatively:
+        // fmt::Debug::fmt(self, f)
+    }
 }
 
 #[derive(Derivative, Debug, PartialEq, Eq, Clone, Getters, Setters)]

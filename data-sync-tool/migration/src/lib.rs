@@ -1,6 +1,7 @@
 pub use sea_orm_migration::prelude::*;
 pub struct Migrator;
 
+pub mod m20220101_000001_create_table;
 pub mod m20231225_000002_create_sync_plan_table;
 pub mod m20231225_000002_create_sync_task_table;
 

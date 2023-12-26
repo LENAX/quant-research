@@ -5,7 +5,7 @@ use core::fmt;
 use std::collections::HashMap;
 
 use super::{
-    custom_errors::TaskCreationError, sync_task::SyncTask, value_objects::sync_config::{SyncConfig, SyncMode},
+    custom_errors::TaskCreationError, sync_task::SyncTask, value_objects::sync_config::{SyncMode, SyncConfig},
     value_objects::task_spec::RequestMethod,
 };
 use chrono::prelude::*;
@@ -35,8 +35,22 @@ pub enum SyncFrequency {
 impl fmt::Display for SyncFrequency {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
-        // or, alternatively:
-        // fmt::Debug::fmt(self, f)
+    }
+}
+
+impl From<&str> for SyncFrequency {
+    fn from(value: &str) -> Self {
+        match value {
+            "Continuous" => SyncFrequency::Continuous,
+            "PerMinute" => SyncFrequency::PerMinute,
+            "PerHour" => SyncFrequency::PerHour,
+            "Daily" => SyncFrequency::Daily,
+            "Weekly" => SyncFrequency::Weekly,
+            "Monthly" => SyncFrequency::Monthly,
+            "Quarterly" => SyncFrequency::Quarterly,
+            "Yearly" => SyncFrequency::Yearly,
+            _ => SyncFrequency::Daily, // Default or perhaps throw an error or log a warning
+        }
     }
 }
 
@@ -80,9 +94,9 @@ impl SyncPlan {
         active: bool,
         tasks: Vec<SyncTask>,
         datasource_id: Option<Uuid>,
-        datasource_name: &str,
+        datasource_name: Option<String>,
         dataset_id: Option<Uuid>,
-        dataset_name: &str,
+        dataset_name: Option<String>,
         param_template_id: Option<Uuid>,
         sync_config: SyncConfig,
     ) -> SyncPlan {
@@ -95,8 +109,8 @@ impl SyncPlan {
             active,
             tasks: tasks,
             datasource_id,
-            datasource_name: Some(datasource_name.to_string()),
-            dataset_name: Some(dataset_name.to_string()),
+            datasource_name: datasource_name,
+            dataset_name: dataset_name,
             dataset_id,
             param_template_id,
             sync_config,

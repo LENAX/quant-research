@@ -1,4 +1,5 @@
 use chrono::{DateTime, Local};
+use crate::domain::synchronization::value_objects::sync_config::SyncConfig;
 use sea_orm::{entity::prelude::*, Set};
 use uuid::Uuid;
 
@@ -72,18 +73,20 @@ impl From<SyncPlan> for self::ActiveModel {
 
 impl From<self::Model> for SyncPlan {
     fn from(model: self::Model) -> Self {
+        let sync_config: SyncConfig = serde_json::from_str(&model.sync_config).unwrap();
         SyncPlan::new(
             &model.name,
             &model.description,
-            &model.trigger_time,
-            SyncFrequency::from(model.frequency),
+            model.trigger_time,
+            SyncFrequency::from(model.frequency.as_str()),
             model.active,
-            &model.datasource_id,
-            &model.datasource_name,
-            &model.dataset_id,
-            &model.dataset_name,
-            &model.param_template_id,
-            &model.sync_config,
+            vec![],
+            model.datasource_id,
+            model.datasource_name,
+            model.dataset_id,
+            model.dataset_name,
+            model.param_template_id,
+            sync_config
         )
     }
 }

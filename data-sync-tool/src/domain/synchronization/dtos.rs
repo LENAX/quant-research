@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::{sync_plan::SyncFrequency, value_objects::sync_config::SyncConfig, sync_task::SyncTask};
 
 #[derive(Debug, Getters, Setters, MutGetters)]
-#[getset(get, set, get_mut)]
+#[getset(get = "pub", set = "pub", get_mut = "pub")]
 // Define a query object for SyncPlan
 pub struct SyncPlanQueryDTO {
     id: Option<Uuid>,
@@ -85,7 +85,7 @@ impl SyncPlanQueryDTO {
 
 
 #[derive(Debug, Default, Getters, Setters, MutGetters)]
-#[getset(get, set, get_mut)]
+#[getset(get = "pub", set = "pub", get_mut = "pub")]
 pub struct SyncPlanUpdateDTO {
     id: Option<Uuid>, // Typically required to identify the plan to update
     name: Option<String>,

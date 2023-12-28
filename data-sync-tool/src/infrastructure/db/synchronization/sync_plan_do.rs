@@ -9,7 +9,7 @@ use crate::domain::synchronization::sync_plan::{SyncPlan, SyncFrequency};
 #[cfg_attr(feature = "with-uuid", feature = "with-chrono")]
 #[sea_orm(table_name = "sync_plan")]
 pub struct Model {
-    #[sea_orm(primary_key)]
+    #[sea_orm(primary_key, auto_increment = false)]
     pub id: Uuid,
     #[sea_orm(indexed)]
     pub name: String,

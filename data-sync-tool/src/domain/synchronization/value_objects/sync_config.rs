@@ -26,6 +26,6 @@ pub enum SyncMode {
 #[derive(Derivative, Debug, Clone, Getters, Setters, Default, Serialize, Deserialize)]
 #[getset(get = "pub", set = "pub")]
 pub struct SyncConfig {
-    sync_rate_quota: Option<RateQuota>,
-    sync_mode: SyncMode
+    pub(crate) sync_rate_quota: Option<RateQuota>,
+    pub(crate) sync_mode: SyncMode,
 }
